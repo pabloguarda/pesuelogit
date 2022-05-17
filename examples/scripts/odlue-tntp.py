@@ -13,8 +13,12 @@ import tensorflow as tf
 import isuelogit as isl
 
 # from src.spad.ueae import StochasticNetworkLoading
-from src.spad.aesue import simulate_features, build_tntp_network, simulate_suelogit_data, UtilityFunction, \
-    ODLUE, Equilibrator, get_design_tensor, get_counts_tensor
+# from src.aesuelogit.aesue import simulate_features, build_tntp_network, simulate_suelogit_data, UtilityFunction, \
+#     ODLUE, Equilibrator, get_design_tensor, get_y_tensor
+
+from src.aesuelogit.aesue import UtilityFunction, ODLUE, Equilibrator
+from src.aesuelogit.networks import build_tntp_network
+from src.aesuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data, simulate_features_tensor
 
 # Path management
 main_dir = str(Path(os.path.abspath('')).parents[0])
@@ -30,7 +34,7 @@ n_periods = 10
 n_links = len(tntp_network.links)
 features_Z = ['c', 's']
 
-exogenous_features = simulate_features(links=tntp_network.links,
+exogenous_features = simulate_features_tensor(links=tntp_network.links,
                                       features_Z= features_Z,
                                       option='continuous',
                                       range=(0, 1),
@@ -58,7 +62,7 @@ df = simulate_suelogit_data(
 
 input_data = get_design_tensor(Z = df[features_Z],y = df['traveltime'],n_links = n_links, n_periods = n_periods)
 
-counts_data = get_counts_tensor(counts = df[['counts']],n_links = n_links, n_periods = n_periods)
+counts_data = get_y_tensor(counts = df[['counts']],n_links = n_links, n_periods = n_periods)
 
 # x = tf.constant(tntp_network.observed_counts_vector.flatten())
 # X = tf.expand_dims(x, 0)
