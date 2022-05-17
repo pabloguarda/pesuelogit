@@ -2,8 +2,8 @@ import numpy as np
 import os
 from pathlib import Path
 
-from src.spad.aesue import simulate_features, build_tntp_network, simulate_suelogit_data, UtilityFunction, \
-    Equilibrator, get_design_tensor, get_counts_tensor, load_k_shortest_paths
+from src.aesuelogit.aesue import simulate_features, build_tntp_network, simulate_suelogit_data, UtilityFunction, \
+    Equilibrator, get_design_tensor, get_y_tensor, load_k_shortest_paths
 
 # Path management
 main_dir = str(Path(os.path.abspath('')).parents[1])
