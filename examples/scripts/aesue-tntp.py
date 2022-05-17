@@ -9,12 +9,11 @@ from sklearn.model_selection import train_test_split
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-import isuelogit as isl
 import time
 
-# from src.spad.ueae import StochasticNetworkLoading
-from src.spad.aesue import simulate_features, build_tntp_network, simulate_suelogit_data, UtilityFunction, \
-    AESUELOGIT, Equilibrator, get_design_tensor, get_y_tensor, load_k_shortest_paths
+from src.aesuelogit.aesue import UtilityFunction, AESUELOGIT, Equilibrator, plot_predictive_performance
+from src.aesuelogit.networks import load_k_shortest_paths, build_tntp_network
+from src.aesuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data
 
 # Path management
 main_dir = str(Path(os.path.abspath('')).parents[1])
@@ -40,7 +39,7 @@ load_k_shortest_paths(network=tntp_network, k=2, update_incidence_matrices=True)
 
 df = pd.read_csv(main_dir + '/output/network-data/' + tntp_network.key + '/links/' + tntp_network.key + '-link-data.csv')
 
-n_periods = len(df.period.unique())
+n_days = len(df.period.unique())
 n_links = len(tntp_network.links)
 features_Z = ['c', 's']
 n_sparse_features = 3
@@ -54,9 +53,9 @@ utility_function = UtilityFunction(features_Y=['tt'],
                                    )
 
 input_data = get_design_tensor(Z = df[features_Z + features_sparse],y = df['traveltime'],
-                               n_links = n_links, n_periods = n_periods)
-traveltime_data = get_design_tensor(y = df['traveltime'],n_links = n_links, n_periods = n_periods)
-counts_data = get_y_tensor(y = df[['counts']],n_links = n_links, n_periods = n_periods)
+                               n_links = n_links, n_days = n_days)
+traveltime_data = get_design_tensor(y = df['traveltime'],n_links = n_links, n_days = n_days)
+counts_data = get_y_tensor(y = df[['counts']],n_links = n_links, n_days = n_days)
 
 # x = tf.constant(tntp_network.observed_counts_vector.flatten())
 # X = tf.expand_dims(x, 0)
