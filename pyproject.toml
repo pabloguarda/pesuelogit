@@ -5,8 +5,9 @@ description = ""
 authors = ["Pablo Guarda <pablo.guarda.r@gmail.com >", "Matt Battifarano <matthew.battifarano@gmail.com>", ]
 
 [tool.poetry.dependencies]
-python = ">=3.7,<3.10"
+python = ">=3.8,<3.10"
 tensorflow = "2.7.0"
+isuelogit = {git = "https://github.com/pabloguarda/isuelogit"}
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
