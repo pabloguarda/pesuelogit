@@ -21,7 +21,7 @@ import time
 import glob
 
 # from src.spad.ueae import StochasticNetworkLoading
-from src.spad.aesue import simulate_features, build_fresno_network, simulate_suelogit_data, UtilityFunction, \
+from src.aesuelogit.aesue import simulate_features, build_fresno_network, simulate_suelogit_data, UtilityFunction, \
     AESUELOGIT, Equilibrator, get_design_tensor, get_y_tensor, load_k_shortest_paths, read_paths, \
     plot_predictive_performance
 
