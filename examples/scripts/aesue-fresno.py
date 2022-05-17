@@ -17,13 +17,11 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import isuelogit as isl
-import time
 import glob
 
-# from src.spad.ueae import StochasticNetworkLoading
-from src.aesuelogit.aesue import simulate_features, build_fresno_network, simulate_suelogit_data, UtilityFunction, \
-    AESUELOGIT, Equilibrator, get_design_tensor, get_y_tensor, load_k_shortest_paths, read_paths, \
-    plot_predictive_performance
+from src.aesuelogit.aesue import UtilityFunction, AESUELOGIT, Equilibrator, plot_predictive_performance
+from src.aesuelogit.networks import load_k_shortest_paths, read_paths,build_fresno_network
+from src.aesuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data
 
 # Path management
 main_dir = str(Path(os.path.abspath('')).parents[1])
