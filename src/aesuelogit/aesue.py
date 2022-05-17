@@ -4,29 +4,13 @@ Module for AutoEncoded Stochastic User Equilibrium with Logit Assignment (ODLUE)
 
 import isuelogit as isl
 from isuelogit.networks import TNetwork
-from isuelogit.printer import block_output, printIterationBar
+from isuelogit.estimation import UtilityFunction
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 from typing import Dict, List, Tuple
-import ast
 import time
-from sklearn import preprocessing
-import glob
-import os
 import matplotlib.pyplot as plt
-
-
-class UtilityFunction(isl.estimation.UtilityFunction):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-
-class Equilibrator(isl.equilibrium.LUE_Equilibrator):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
 
 
 class ODLUE(tf.keras.Model):
@@ -93,7 +77,7 @@ class ODLUE(tf.keras.Model):
 
         # self.linklist = [(link.key[0], link.key[1]) for link in self.network.links]
         self.n_nodes = self.network.get_n_nodes()
-        # self.triplist = self.network.ods
+        self.triplist = self.network.ods
         # self.I = np.identity(self.n_nodes)
 
         # TODO: Generate D matrix with linklist and a sparse tensor
@@ -440,6 +424,18 @@ class AESUELOGIT(ODLUE):
         return train_losses_df, val_losses_df
 
 
+class UtilityFunction(isl.estimation.UtilityFunction):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+
+class Equilibrator(isl.equilibrium.LUE_Equilibrator):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+
 def error(actual: tf.constant, predicted: tf.constant):
     return tf.boolean_mask(predicted - actual, tf.math.is_finite(predicted - actual))
 
@@ -456,183 +452,6 @@ def btcg_mse(actual: tf.constant, predicted: tf.constant):
     return 1 / 2 * tf.reduce_mean(tf.math.pow(tf.boolean_mask(rel_error, tf.math.is_finite(rel_error)) - 1, 2))
     # return 1 / 2 * tf.reduce_mean(tf.math.pow(error(actual, predicted) /
     #                                           (tf.boolean_mask(actual, tf.math.is_finite(actual)) + epsilon), 2))
-
-
-def simulate_features(n_periods, **kwargs):
-    linkdata_generator = isl.factory.LinkDataGenerator()
-
-    df_list = []
-
-    for i in range(1, n_periods + 1):
-        df_day = linkdata_generator.simulate_features(**kwargs)
-        df_day.insert(0, 'period', i)
-        df_list.append(df_day)
-
-    df = pd.concat(df_list)
-
-    return df
-
-
-def convert_multiperiod_df_to_tensor(df, n_days, n_links, features, n_hours=1):
-    '''
-    Convert to a tensor of dimensions (n_days, n_hours, n_links, n_features).
-    df is a dataframe that contains the feature data
-    '''
-
-    return tf.constant(np.array(df[features]).reshape(n_days, n_hours, n_links, len(features)))
-
-
-def simulate_features_tensor(**kwargs):
-    return convert_multiperiod_df_to_tensor(df=simulate_features(**kwargs),
-                                            n_links=len(kwargs['links']),
-                                            features=kwargs['features_Z'],
-                                            n_days=kwargs['n_days']
-                                            )
-
-
-def simulate_suelogit_data(periods: List,
-                           features_data: pd.DataFrame,
-                           network: TNetwork,
-                           equilibrator: Equilibrator,
-                           **kwargs):
-    linkdata_generator = isl.factory.LinkDataGenerator()
-
-    df_list = []
-
-    for i, period in enumerate(periods):
-        printIterationBar(i + 1, len(periods), prefix='periods:', length=20)
-
-        # linkdata_generator.simulate_features(**kwargs)
-        df_period = features_data[features_data.period == period]
-
-        network.load_features_data(linkdata=df_period)
-
-        with block_output(show_stdout=False, show_stderr=False):
-            counts, _ = linkdata_generator.simulate_counts(
-                network=network,
-                equilibrator=equilibrator,
-                noise_params={'mu_x': 0, 'sd_x': 0},
-                coverage=1)
-
-        network.load_traffic_counts(counts=counts)
-
-        df_period['traveltime'] = [link.true_traveltime for link in network.links]
-
-        df_period['counts'] = network.observed_counts_vector
-
-        df_list.append(df_period)
-
-    df = pd.concat(df_list)
-
-    return df
-
-
-def get_design_tensor(Z: pd.DataFrame = None,
-                      y: pd.DataFrame = None,
-                      **kwargs) -> tf.Tensor:
-    """
-    return tensor with dimensions (n_days, n_links, 1+n_features)
-    """
-
-    if Z is None:
-        df = y
-        if isinstance(df, pd.Series):
-            df = pd.DataFrame(df)
-    elif y is None:
-        df = Z
-    else:
-        df = pd.concat([y, Z], axis=1)
-
-    return convert_multiperiod_df_to_tensor(df=df, features=df.columns, **kwargs)
-
-
-def get_y_tensor(y: pd.DataFrame, **kwargs):
-    return convert_multiperiod_df_to_tensor(y, features=y.columns, **kwargs)
-
-
-def build_tntp_network(network_name):
-    '''
-    Read data from tntp repository and build network object
-    '''
-
-    links_df = isl.reader.read_tntp_linkdata(network_name=network_name)
-    links_df['link_key'] = [(i, j, '0') for i, j in zip(links_df['init_node'], links_df['term_node'])]
-
-    network_generator = isl.factory.NetworkGenerator()
-    A = network_generator.generate_adjacency_matrix(links_keys=list(links_df['link_key'].values))
-    tntp_network = network_generator.build_network(A=A, network_name=network_name)
-
-    # Link performance functions
-    tntp_network.set_bpr_functions(bprdata=pd.DataFrame({'link_key': tntp_network.links_dict.keys(),
-                                                         'alpha': links_df.b,
-                                                         'beta': links_df.power,
-                                                         'tf': links_df.free_flow_time,
-                                                         'k': links_df.capacity
-                                                         }))
-
-    # Link features from TNTP repo
-    # link_features_df = links_df[['link_key', 'length', 'speed', 'link_type', 'toll']]
-
-    # OD matrix
-    Q = isl.reader.read_tntp_od(network_name=network_name)
-    tntp_network.load_OD(Q=Q)
-
-    return tntp_network
-
-
-def build_fresno_network():
-    # Read nodes data
-    nodes_df = pd.read_csv(isl.config.dirs['read_network_data'] + 'nodes/' + 'fresno-nodes-data.csv')
-
-    # Read link specific attributes
-    links_df = pd.read_csv(isl.config.dirs['read_network_data'] + 'links/' 'fresno-link-specific-data.csv',
-                           converters={"link_key": ast.literal_eval, "pems_id": ast.literal_eval})
-
-    links_df['free_flow_speed'] = links_df['length'] / links_df['tf_inrix']
-
-    network_generator = isl.factory.NetworkGenerator()
-
-    network = \
-        network_generator.build_fresno_network(
-            A=network_generator.generate_adjacency_matrix(links_keys=list(links_df['link_key'].values)),
-            links_df=links_df, nodes_df=nodes_df, network_name='Fresno')
-
-    bpr_parameters_df = pd.DataFrame({'link_key': links_df['link_key'],
-                                      'alpha': links_df['alpha'],
-                                      'beta': links_df['beta'],
-                                      'tf': links_df['tf_inrix'],
-                                      # 'tf': links_df['tf'],
-                                      'k': pd.to_numeric(links_df['k'], errors='coerce', downcast='float')
-                                      })
-
-    # Normalize free flow travel time between 0 and 1
-    bpr_parameters_df['tf'] = pd.DataFrame(
-        preprocessing.MinMaxScaler().fit_transform(np.array(bpr_parameters_df['tf']).reshape(-1, 1)))
-
-    network.set_bpr_functions(bprdata=bpr_parameters_df)
-
-    network_generator.read_OD(network=network, sparse=True)
-
-    return network
-
-
-def load_k_shortest_paths(network, k, update_incidence_matrices=False, **kwargs):
-    isl.factory.PathsGenerator().load_k_shortest_paths(network=network,
-                                                       k=k,
-                                                       update_incidence_matrices=False,
-                                                       **kwargs)
-    if update_incidence_matrices:
-        paths_od = network.paths_od
-        network.D = network.generate_D(paths_od=paths_od, links=network.links)
-        network.M = network.generate_M(paths_od=paths_od)
-
-        # TODO: remove dependency on C after translating operations to sparse representation
-        network.C = network.generate_C(network.M)
-
-
-def read_paths(network, **kwargs):
-    return isl.factory.PathsGenerator().read_paths(network=network, **kwargs)
-
 
 def plot_predictive_performance(train_losses_df: pd.DataFrame, val_losses_df: pd.DataFrame):
     fig = plt.figure()
