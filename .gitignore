@@ -141,3 +141,7 @@ cython_debug/
 # Pycharm
 .idea/
 
+examples/scripts/extra-gps/
+
+# Input
+input/private
