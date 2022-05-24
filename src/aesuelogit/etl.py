@@ -4,14 +4,14 @@ from isuelogit.printer import block_output, printIterationBar
 import tensorflow as tf
 import numpy as np
 from typing import Dict, List, Tuple
-from .aesue import TNetwork, Equilibrator
+from .networks import TransportationNetwork, Equilibrator
 
-def simulate_features(n_periods, **kwargs):
+def simulate_features(n_days, **kwargs):
     linkdata_generator = isl.factory.LinkDataGenerator()
 
     df_list = []
 
-    for i in range(1, n_periods + 1):
+    for i in range(1, n_days + 1):
         df_day = linkdata_generator.simulate_features(**kwargs)
         df_day.insert(0, 'period', i)
         df_list.append(df_day)
@@ -38,17 +38,17 @@ def simulate_features_tensor(**kwargs):
                                             )
 
 
-def simulate_suelogit_data(periods: List,
+def simulate_suelogit_data(days: List,
                            features_data: pd.DataFrame,
-                           network: TNetwork,
+                           network: TransportationNetwork,
                            equilibrator: Equilibrator,
                            **kwargs):
     linkdata_generator = isl.factory.LinkDataGenerator()
 
     df_list = []
 
-    for i, period in enumerate(periods):
-        printIterationBar(i + 1, len(periods), prefix='periods:', length=20)
+    for i, period in enumerate(days):
+        printIterationBar(i + 1, len(days), prefix='days:', length=20)
 
         # linkdata_generator.simulate_features(**kwargs)
         df_period = features_data[features_data.period == period]
@@ -96,3 +96,56 @@ def get_design_tensor(Z: pd.DataFrame = None,
 
 def get_y_tensor(y: pd.DataFrame, **kwargs):
     return convert_multiperiod_df_to_tensor(y, features=y.columns, **kwargs)
+
+def traveltime_imputation(raw_data: pd.DataFrame):
+
+    # Set free flow travel time based on the minimum of the minimums travel times in the set of measurements
+    # collected for each link
+    # raw_data['tt_ff'] = raw_data['tf_inrix']
+    raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'] == 0), 'tt_ff'] = tf.float64.max
+
+    raw_data = raw_data.assign(tt_ff=raw_data.groupby(['link_key'])['tt_ff'].transform(min))
+    # raw_data[raw_data['link_key'] == "(0, 1621, '0')"]
+
+    # Impute links with zero average travel time at a given hr-day with average travel times over days-hrs at that link
+    tt_avg_imputation = raw_data[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] != 0)].groupby(['link_key'])[
+        'tt_avg'].mean()
+    raw_data = pd.merge(raw_data, pd.DataFrame({'link_key': tt_avg_imputation.index,
+                                                'tt_avg_imputed': tt_avg_imputation.values}), on='link_key', how='left')
+
+    # indices = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg']==0)].index
+    # raw_data.loc[indices,'tt_avg'] = raw_data.loc[indices,'tt_avg_imputed']
+
+    indices = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] == 0)
+                           & ~(raw_data['tt_avg_imputed'].isna())].index
+
+    raw_data.loc[indices, 'tt_avg'] = raw_data.loc[indices, 'tt_avg_imputed'].copy()
+
+    return raw_data.copy()
+
+
+
+def data_curation(raw_data: pd.DataFrame):
+
+    raw_data.loc[raw_data['counts'] <= 0, "counts"] = np.nan
+
+    # Replace free flow travel times with nan with travel time reported in original nework files
+    indices = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'].isna())].index
+    raw_data.loc[indices, 'tt_ff'] = raw_data.loc[indices, 'tf'].copy()
+
+    # raw_data = traveltime_imputation(raw_data)
+
+    raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'] == 0), 'tt_ff'] = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'] != 0), 'tt_ff'].mean()
+
+    raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] == 0), 'tt_avg'] = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] != 0), 'tt_avg'].mean()
+
+    #raw_data[['tt_ff', 'tt_avg', 'tt_avg_imputed', 'link_type']]#
+
+    # Travel time average cannot be lower than free flow travel time or have nan entries
+    indices = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & ((raw_data['tt_avg']<raw_data['tt_ff']) | raw_data['tt_avg'].isna())].index
+    # We impute the average as 2 times the value of free flow travel time but we may determine this
+    # factor based on a regression or correlation
+    factor_ff_to_avg = 2
+    raw_data.loc[indices, 'tt_avg'] = factor_ff_to_avg*raw_data.loc[indices, 'tt_ff'].copy()
+
+    return raw_data
