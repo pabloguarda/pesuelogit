@@ -11,8 +11,9 @@ import pandas as pd
 import tensorflow as tf
 import time
 
-from src.aesuelogit.aesue import UtilityFunction, AESUELOGIT, Equilibrator, plot_predictive_performance
-from src.aesuelogit.networks import load_k_shortest_paths, build_tntp_network
+from src.aesuelogit.visualizations import plot_predictive_performance
+from src.aesuelogit.models import UtilityFunction, AESUELOGIT, NGD
+from src.aesuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator, ColumnGenerator
 from src.aesuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data
 
 # Path management
@@ -22,131 +23,106 @@ print('main dir:',main_dir)
 
 tntp_network = build_tntp_network(network_name='SiouxFalls')
 
-# links_df = isl.reader.read_tntp_linkdata(network_name='SiouxFalls')
-# links_df['link_key'] = [(i, j, '0') for i, j in zip(links_df['init_node'], links_df['term_node'])]
-#
-# # Link performance functions (assumed linear for consistency with link_cost function definion)
-# tntp_network.set_bpr_functions(bprdata=pd.DataFrame({'link_key': tntp_network.links_dict.keys(),
-#                                                      'alpha': links_df.b,
-#                                                      'beta': links_df.power,
-#                                                      'tf': links_df.free_flow_time,
-#                                                      'k': links_df.capacity
-#                                                      }))
-
 # Paths
 load_k_shortest_paths(network=tntp_network, k=2, update_incidence_matrices=True)
 # features_Z = []
 
+# REad synthethic data which was generated under the assumption of path sets of size 2.
 df = pd.read_csv(main_dir + '/output/network-data/' + tntp_network.key + '/links/' + tntp_network.key + '-link-data.csv')
 
 n_days = len(df.period.unique())
 n_links = len(tntp_network.links)
+n_hours = 1
+
 features_Z = ['c', 's']
-n_sparse_features = 3
+# features_Z = []
+
+n_sparse_features = 0
 features_sparse = ['k' + str(i) for i in np.arange(0, n_sparse_features)]
 # features_sparse = []
-
+features_Z.extend(features_sparse)
 
 utility_function = UtilityFunction(features_Y=['tt'],
-                                   features_Z=features_Z + features_sparse,
-                                   true_values={'tt': -1, 'c': -6, 's': -3}
+                                   features_Z=features_Z,
+                                   # true_values={'tt': -1, 'c': -6, 's': -3},
+                                   # initial_values={'tt': -4, 'c': -6, 's': -3}
                                    )
-
-input_data = get_design_tensor(Z = df[features_Z + features_sparse],y = df['traveltime'],
-                               n_links = n_links, n_days = n_days)
-traveltime_data = get_design_tensor(y = df['traveltime'],n_links = n_links, n_days = n_days)
-counts_data = get_y_tensor(y = df[['counts']],n_links = n_links, n_days = n_days)
-
-# x = tf.constant(tntp_network.observed_counts_vector.flatten())
-# X = tf.expand_dims(x, 0)
-#
-# rng = tf.random.Generator.from_seed(1234)
-# n_samples = 10
-# n_links = len(tntp_network.links)
-# data = x + rng.normal((n_samples, n_links), mean=0, stddev=0.01, dtype=tf.float64)
-
-model = AESUELOGIT(
-    network = tntp_network,
-    dtype=tf.float64,
-    trainables= {'q': False, 'theta': True, 'beta': False, 'alpha': False},
-    utility_function = utility_function,
-    inits = {'q': np.ones_like(tntp_network.q.flatten()),
-             # 'theta': np.array(list(utility_function.true_values.values())),
-             'theta': np.array(list(utility_function.initial_values.values())),
-             'beta': np.array([2]),
-             'alpha': np.array([1])
-             },
-)
-
-print(model.trainable_variables)
-print(f"q = {model.q}, beta  = {model.beta}")
-
-true_model = AESUELOGIT(network = tntp_network, dtype=tf.float64, utility_function = utility_function)
-
-# print("Difference between observed and predicted counts:", f"{np.sum(np.squeeze(counts_data)-true_model(input_data))}")
-
-print(f"Q = {tf.sparse.to_dense(true_model.Q)}")
-# print(f"link cost = {true_model.link_cost(X)}")
-# print(f"link logits = {true_model.link_logits(X)}")
-
-optimizer = tf.keras.optimizers.Adam()
-# optimizer = tf.keras.optimizers.Adam(learning_rate=1e-1)
-# optimizer = tf.keras.optimizers.Adagrad()
 
 
 # Prepare the training and validation dataset.
-batch_size = 16
 
-X_train, X_val, y_train, y_val = train_test_split(input_data, traveltime_data, test_size=0.2, random_state=42)
+# Add free flow travel times
+df['tt_ff'] = np.tile([link.bpr.tf for link in tntp_network.links],n_days)
 
-train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-train_dataset = train_dataset.shuffle(buffer_size=1024).batch(batch_size)
+# X_train, X_val, y_train, y_val = train_test_split(input_data, traveltime_data, test_size=0.2, random_state=42)
 
-val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
-val_dataset = val_dataset.batch(batch_size)
+traveltime_data = get_design_tensor(y=df['traveltime'], n_links=n_links, n_days=n_days, n_hours=n_hours)
+flow_data = get_y_tensor(y=df[['counts']], n_links=n_links, n_days=n_days, n_hours=n_hours)
 
-# Training
-loss = tf.reduce_mean(tf.norm(model(input_data)-np.squeeze(traveltime_data)))
-epoch = 0
-epochs = 1000
-t0 = time.time()
-lambda_od = tf.constant(1e3,name="lambda_od", dtype=tf.float64)
-lambda_theta = tf.constant(1e2,name="lambda_od", dtype=tf.float64)
+Y = tf.concat([traveltime_data, flow_data], axis=3)
+X = get_design_tensor(Z=df[['traveltime'] + features_Z], y=df['tt_ff'], n_links=n_links, n_days=n_days, n_hours=n_hours)
 
-while loss > 1e-8 and epoch <= epochs:
 
-    for step, (x_batch_train, y_batch_train) in enumerate(train_dataset):
-        with tf.GradientTape() as tape:
+X_train, X_val, Y_train, Y_val = train_test_split(X.numpy(), Y.numpy(), test_size=0.5, random_state=42)
 
-            loss_traveltimes = tf.reduce_mean(tf.norm(np.squeeze(y_batch_train) - model(x_batch_train)))
-            loss_od = lambda_od*tf.norm(model.q-tf.constant(tntp_network.q.flatten()))
-            loss_theta = lambda_theta*tf.norm(model.theta,1)
-            loss = loss_traveltimes + loss_od + loss_theta
+X_train, X_val, Y_train, Y_val = [tf.constant(i) for i in [X_train, X_val, Y_train, Y_val]]
 
-        grads = tape.gradient(loss, model.trainable_variables)
-        optimizer.apply_gradients(zip(grads, model.trainable_variables))
+_EPOCHS = 100
+_BATCH_SIZE = 4
+_LR = 5e-1
 
-    if epoch % 10 == 0:
-        # print(f"{i}: loss={loss.numpy():0.4g}, demand={model.q}, cost coefficients={model.m}, link flow={x_hat.numpy().mean(0)}, link cost={model.link_cost(data).numpy().mean(0)}")
-        # print(f"{i}: loss={loss.numpy():0.4g}, theta = {model.theta.numpy()}")
-        print(f"{epoch}: loss={loss_traveltimes.numpy():0.4g}, theta = {model.theta.numpy()}, alpha = {model.alpha.numpy()[0]:0.4g}, beta = {model.beta.numpy()[0]:0.4g}, demand avg abs diff ={np.mean(np.abs(model.q-tntp_network.q.flatten())):0.4g}, time: {time.time()-t0: 0.4g}")
+# optimizer = NGD(learning_rate=_LR)
+# optimizer = tf.keras.optimizers.Adagrad(learning_rate=_LR)
+optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
 
-        t0 = time.time()
+equilibrator = Equilibrator(
+    network=tntp_network,
+    # paths_generator=paths_generator,
+    utility_function=utility_function,
+    max_iters=100,
+    method='fw',
+    iters_fw=50,
+    accuracy=1e-4,
+)
 
-    epoch += 1
+column_generator = ColumnGenerator(equilibrator=equilibrator,
+                                   utility_function=utility_function,
+                                   n_paths=0,
+                                   ods_coverage=0.1,
+                                   ods_sampling='sequential',
+                                   # ods_sampling='demand',
+                                   )
 
-print(f"{epoch} [FINAL]: loss={loss.numpy():0.4g}")
+train_losses_dfs = {}
+val_losses_dfs = {}
 
-# print(f"{i} [FINAL]: loss={loss.numpy():0.4g}, demand={model.q},cost coefficients={model.m}, link flow={x_hat.numpy().mean(0)}, link cost={model.link_cost(data).numpy().mean(0)}")
+# Model 1 (Utility only)
+model_1 = AESUELOGIT(
+    key='model_1',
+    network=tntp_network,
+    dtype=tf.float64,
+    trainables={'theta': True, 'theta_links': False, 'psc_factor': False, 'q': True, 'alpha': True, 'beta': True},
+    equilibrator=equilibrator,
+    column_generator=column_generator,
+    utility_function=utility_function,
+    inits={
+        # 'q': tntp_network.q.flatten(),
+        'q': 0.6*tntp_network.q.flatten(),
+        # 'q': 10*np.ones_like(tntp_network.q.flatten()),
+        'theta': np.array(list(utility_function.initial_values.values())),
+        'beta': np.array([1]),
+        'alpha': np.array([1])
+        # 'alpha': np.array([1 for link in fresno_network.links])
+    },
+)
 
-alpha_true = np.array([link.bpr.alpha for link in tntp_network.links])
-beta_true = np.array([link.bpr.beta for link in tntp_network.links])
 
-print(f"true theta = {utility_function.true_values}",f", theta = {model.theta.numpy()}")
-print(f"alpha = {model.alpha}", '\n', f"true alpha = {alpha_true}")
-print(f"beta = {model.beta}", '\n', f"true beta = {beta_true}")
+train_losses_dfs['model_1'], val_losses_dfs['model_1'] = model_1.train(
+    X_train, Y_train, X_val, Y_val,
+    optimizer=optimizer,
+    batch_size=_BATCH_SIZE,
+    lambdas={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'bpr': 0},
+    epochs=_EPOCHS)
 
-# print(f"OD demand = {model.q}", '\n', f"True OD = {tntp_network.q.flatten()}")
-print("Avg abs difference between observed and estimated OD:", f"{np.mean(np.abs(model.q-tntp_network.q.flatten()))}")
-# np.mean(tntp_network.q)
-# np.mean((model(tf.expand_dims(x, 0)).numpy()-true_model(tf.expand_dims(x, 0)).numpy())**2)
+plot_predictive_performance(train_losses=train_losses_dfs['model_1'], val_losses=val_losses_dfs['model_1'])
+
