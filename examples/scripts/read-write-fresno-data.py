@@ -66,7 +66,7 @@ fresno_network = \
 # f) OD
 # =============================================================================
 
-# - Periods (6 periods of 15 minutes each)
+# - Periods (6 days of 15 minutes each)
 data_reader.options['od_periods'] = [1, 2, 3, 4]
 
 # Read OD from raw data
@@ -180,10 +180,13 @@ for date, hour in itertools.product(dates, hours):
     # d) FREE FLOW TRAVEL TIME OF LINK PERFORMANCE FUNCTIONS
     # =============================================================================
 
+    # TODO: I may remove these lines and do the data processing of free flow travel times later
+
     for link in fresno_network.links:
         if link.link_type == 'LWRLK' and link.Z_dict['speed_ref_avg'] != 0:
             # Multiplied by 60 so speeds are in minutes
-            link.Z_dict['tf_inrix'] = tt_factor * link.Z_dict['length'] / link.Z_dict['speed_max']
+            # link.Z_dict['tf_inrix'] = tt_factor * link.Z_dict['length'] / link.Z_dict['speed_max']
+            link.Z_dict['tf_inrix'] = tt_factor * link.Z_dict['length'] / link.Z_dict['speed_ref_avg']
         #             link.bpr.tf = tt_factor * link.Z_dict['length'] / link.Z_dict['speed_ref_avg']
         else:
             link.Z_dict['tf_inrix'] = link.bpr.tf
