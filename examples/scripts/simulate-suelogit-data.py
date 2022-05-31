@@ -2,8 +2,9 @@ import numpy as np
 import os
 from pathlib import Path
 
-from src.aesuelogit.aesue import simulate_features, build_tntp_network, simulate_suelogit_data, UtilityFunction, \
-    Equilibrator, get_design_tensor, get_y_tensor, load_k_shortest_paths
+from src.aesuelogit.models import UtilityParameters, NGD
+from src.aesuelogit.networks import build_tntp_network, Equilibrator, load_k_shortest_paths
+from src.aesuelogit.etl import simulate_features, simulate_suelogit_data, get_design_tensor, get_y_tensor
 
 # Path management
 main_dir = str(Path(os.path.abspath('')).parents[1])
@@ -26,23 +27,17 @@ tntp_network = build_tntp_network(network_name='SiouxFalls')
 # Paths
 load_k_shortest_paths(network=tntp_network, k=2, update_incidence_matrices=True)
 
-n_periods = 128
+n_days = 128
 n_links = len(tntp_network.links)
 features_Z = ['c', 's']
 
 n_sparse_features = 3
 features_sparse = ['k' + str(i) for i in np.arange(0, n_sparse_features)]
 
-exogenous_features = simulate_features(links=tntp_network.links,
-                                      features_Z= features_Z + features_sparse,
-                                      option='continuous',
-                                      range=(0, 1),
-                                      n_periods = n_periods)
-
-utility_function = UtilityFunction(features_Y=['tt'],
-                                   features_Z=features_Z,
-                                   true_values={'tt': -1, 'c': -6, 's': -3}
-                                   )
+utility_function = UtilityParameters(features_Y=['tt'],
+                                     features_Z=features_Z,
+                                     true_values={'tt': -1, 'c': -6, 's': -3}
+                                     )
 utility_function.add_sparse_features(Z=features_sparse)
 
 
@@ -51,12 +46,19 @@ equilibrator = Equilibrator(network=tntp_network,
                             uncongested_mode=False,
                             max_iters=100,
                             method='fw',
+                            accuracy = 1e-10,
                             iters_fw=100,
                             search_fw='grid')
 
+exogenous_features = simulate_features(links=tntp_network.links,
+                                       features_Z= features_Z + features_sparse,
+                                       option='continuous',
+                                       range=(0, 1),
+                                       n_days = n_days)
+
 # Generate data from multiple days by varying the value of the exogenous attributes instead of adding random noise only
 df = simulate_suelogit_data(
-    periods = list(exogenous_features.period.unique()),
+    days= list(exogenous_features.period.unique()),
     features_data = exogenous_features,
     equilibrator=equilibrator,
     network = tntp_network)
