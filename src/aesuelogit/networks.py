@@ -1,3 +1,9 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .models import UtilityParameters
+
 import isuelogit as isl
 from isuelogit.networks import TNetwork
 from isuelogit.printer import block_output, printIterationBar
@@ -133,7 +139,10 @@ class TransportationNetwork(isl.networks.DiTNetwork):
 
 class Equilibrator(LUE_Equilibrator):
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, utility: UtilityParameters = None, *args, **kwargs):
+
+        kwargs['utility'] = utility
+
         super().__init__(*args, **kwargs)
 
     def path_based_suelogit_equilibrium(self, *args, **kwargs):
@@ -142,13 +151,13 @@ class Equilibrator(LUE_Equilibrator):
 
 class ColumnGenerator():
     def __init__(self,
-                 utility_function,
+                 utility: UtilityParameters,
                  equilibrator=None,
                  paths_generator=None,
                  **kwargs):
 
         # Create an arbitrary a equilibrator and provide it with an arbitrary path generator when no provided
-        self.utility_function = utility_function
+        self.utility_function = utility
         self.paths_generator = paths_generator
         self.equilibrator = equilibrator
 
@@ -192,7 +201,7 @@ class ColumnGenerator():
         self.equilibrator.path_set_selection(*args, **kwargs)
 
 
-def build_tntp_network(network_name) -> TNetwork:
+def build_tntp_network(network_name) -> TransportationNetwork:
     '''
     Read data from tntp repository and build network object
     '''
@@ -219,10 +228,6 @@ def build_tntp_network(network_name) -> TNetwork:
 
     # Link features from TNTP repo
     # link_features_df = links_df[['link_key', 'length', 'speed', 'link_type', 'toll']]
-
-    # OD matrix
-    Q = isl.reader.read_tntp_od(network_name=network_name)
-    tntp_network.load_OD(Q=Q)
 
     return tntp_network
 
@@ -302,6 +307,9 @@ def build_fresno_network():
         network.links_dict[link_key].term_node.id = str(term_node_row['id'].values[0])
         # note that some ids include a large tab before the number comes up ('   1), I may remove those spaces
         network.links_dict[link_key].id = row['id']
+
+        network.links_dict[link_key].link_type = row['link_type']
+        network.links_dict[link_key].Z_dict['link_type'] = row['link_type']
 
     bpr_parameters_df = pd.DataFrame({'link_key': links_df['link_key'],
                                       'alpha': links_df['alpha'],
