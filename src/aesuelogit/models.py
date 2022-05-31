@@ -146,7 +146,7 @@ class Parameters(isl.estimation.UtilityFunction):
     def constant_initializer(self, value):
         self.initial_values = dict.fromkeys(self.keys(), value)
 
-    def random_initializer(self, range_values: Union[tuple, Dict[str, tuple]], keys: List = None):
+    def random_initializer(self, range_values: Union[Tuple, Dict[str, Tuple]], keys: List = None):
         """ Randomly initialize values of the utility parameters based on true values and range """
 
         assert len(range_values) == 2, 'range must have length'
@@ -816,7 +816,7 @@ class AESUELOGIT(ODLUE):
     # def best_results(self, results: pd.DataFrame):
     #     return results[results['loss_total'].argmin()]
 
-    def split_results(self, results: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def split_results(self, results: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         col_losses = ['epoch'] + [col for col in results.columns if any(x in col for x in ['loss_','error'])]
 
@@ -835,7 +835,7 @@ class AESUELOGIT(ODLUE):
               loss_weights: Dict[str, float],
               generalization_error: Dict[str,bool] = None,
               epochs=1,
-              batch_size=None) -> tuple[pd.DataFrame, pd.DataFrame]:
+              batch_size=None) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         """ It assumes the first column of tensors X_train and X_val are the free flow travel times. The following
         columns are the travel times and exogenous features of each link """
