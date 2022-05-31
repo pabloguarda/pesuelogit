@@ -129,9 +129,9 @@ def data_curation(raw_data: pd.DataFrame):
 
     raw_data.loc[raw_data['counts'] <= 0, "counts"] = np.nan
 
-    # Replace free flow travel times with nan with travel time reported in original nework files
-    indices = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'].isna())].index
-    raw_data.loc[indices, 'tt_ff'] = raw_data.loc[indices, 'tf'].copy()
+    # Replace free flow travel times with nans with travel time reported in original nework files
+    indices = set(raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'].isna())].index)
+    raw_data.loc[indices, 'tt_ff'] = raw_data.loc[indices, 'tf']
 
     # raw_data = traveltime_imputation(raw_data)
 
@@ -141,11 +141,11 @@ def data_curation(raw_data: pd.DataFrame):
 
     #raw_data[['tt_ff', 'tt_avg', 'tt_avg_imputed', 'link_type']]#
 
-    # Travel time average cannot be lower than free flow travel time or have nan entries
+    # Travel time average cannot be lower than free flow travel time or to have nan entries
     indices = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & ((raw_data['tt_avg']<raw_data['tt_ff']) | raw_data['tt_avg'].isna())].index
     # We impute the average as 2 times the value of free flow travel time but we may determine this
     # factor based on a regression or correlation
     factor_ff_to_avg = 2
-    raw_data.loc[indices, 'tt_avg'] = factor_ff_to_avg*raw_data.loc[indices, 'tt_ff'].copy()
+    raw_data.loc[set(indices), 'tt_avg'] = factor_ff_to_avg*raw_data.loc[set(indices), 'tt_ff']
 
     return raw_data
