@@ -8,52 +8,263 @@ import pandas as pd
 import tensorflow as tf
 from tensorflow import keras
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 import time
-from .networks import Equilibrator, ColumnGenerator
-
-
-def error(actual: tf.constant, predicted: tf.constant):
-    return tf.boolean_mask(predicted - actual, tf.math.is_finite(predicted - actual))
-
-
-def mse(actual: tf.constant, predicted: tf.constant):
-    return tf.reduce_mean(tf.math.pow(error(actual, predicted), 2))
-
-
-def btcg_mse(actual: tf.constant, predicted: tf.constant):
-    ''' Normalization used by Wu et al. (2018), TRC. This metric has more numerical issues than using MSE'''
-
-    rel_error = tf.math.divide_no_nan(predicted, actual)
-
-    return 1 / 2 * tf.reduce_mean(tf.math.pow(tf.boolean_mask(rel_error, tf.math.is_finite(rel_error)) - 1, 2))
-    # return 1 / 2 * tf.reduce_mean(tf.math.pow(error(actual, predicted) /
-    #                                           (tf.boolean_mask(actual, tf.math.is_finite(actual)) + epsilon), 2))
-
+from .networks import Equilibrator, ColumnGenerator, TransportationNetwork
+from isuelogit.estimation import Parameter, compute_vot
+from .descriptive_statistics import error, mse, rmse, nrmse, btcg_mse
 
 class NGD(tf.keras.optimizers.SGD):
-
     """ NGD: Normalizaed Gradient Descent """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
     def apply_gradients(self, *args, **kwargs):
-
         grads_and_vars = [(g, v) for g, v in args[0] if g is not None]
 
         normalized_grads, vars = [], []
-        for g,v in grads_and_vars:
+        for g, v in grads_and_vars:
             normalized_grads.append(g / tf.norm(g, 2))
             vars.append(v)
 
-        return tf.keras.optimizers.SGD.apply_gradients(self,zip(normalized_grads,vars))
+        return tf.keras.optimizers.SGD.apply_gradients(self, zip(normalized_grads, vars))
 
 
-class UtilityFunction(isl.estimation.UtilityFunction):
+class Parameters(isl.estimation.UtilityFunction):
+    """ Extension of isl.Parameters class. It supports parameters on multiple periods"""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self,
+                 keys=None,
+                 shapes=None,
+                 trainables=None,
+                 periods: int = 1,
+                 link_specifics=None,
+                 *args,
+                 **kwargs):
+
         super().__init__(*args, **kwargs)
+
+        if keys is None:
+            keys = {}
+
+        self.periods = periods
+
+        for key in keys:
+            self.parameters[key] = Parameter(key=key,
+                                             type=None,
+                                             sign=kwargs.get('signs', {}).get(key, None),
+                                             fixed=kwargs.get('fixed', {}).get(key, False),
+                                             initial_value=kwargs.get('initial_values', {}).get(key, 0),
+                                             true_value=kwargs.get('true_values', {}).get(key))
+
+        for parameter in self.parameters.values():
+            parameter.trainable = True
+
+        self.trainables = trainables
+
+        for parameter in self.parameters.values():
+            parameter.link_specific = False
+
+        self.link_specifics = link_specifics
+
+        for parameter in self.parameters.values():
+            parameter.shape = (1,)
+
+        self.shapes = shapes
+
+    def keys(self):
+        return list(self.parameters.keys())
+
+    @property
+    def link_specifics(self):
+        return {key: parameter.link_specific for key, parameter in self.parameters.items()}
+
+    @link_specifics.setter
+    def link_specifics(self, values: Dict[str, str]):
+
+        if values is not None:
+            for feature, value in values.items():
+                value = values[feature]
+                assert isinstance(value, bool)
+                self.parameters[feature].link_specific = values[feature]
+
+    @property
+    def trainables(self):
+        return {key: parameter.trainable for key, parameter in self.parameters.items()}
+
+    @trainables.setter
+    def trainables(self, values: Dict[str, str]):
+
+        if values is not None:
+            for feature, value in values.items():
+                value = values[feature]
+                assert isinstance(value, bool)
+                self.parameters[feature].trainable = values[feature]
+
+    @property
+    def shapes(self):
+        return {key: parameter.shape for key, parameter in self.parameters.items()}
+
+    @shapes.setter
+    def shapes(self, values: Dict[str, str]):
+        if values is None:
+            for feature, value in self.initial_values.items():
+                if isinstance(value, float) or isinstance(value, int):
+                    value = np.array([value])
+                if isinstance(value, np.ndarray):
+                    self.parameters[feature].shape = value.shape
+
+        if values is not None:
+            for feature, value in values.items():
+                self.parameters[feature].shape = values[feature]
+
+    def true_values_array(self, features = None) -> np.array:
+
+        values_list = list(self.true_values.values())
+
+        if features is not None:
+            values_list = [self.true_values[feature] for feature in features]
+
+        if self.periods == 1:
+            return np.array(list(values_list))
+
+        return np.repeat(np.array(values_list)[np.newaxis, :], self.periods, axis=0)
+
+    def initial_values_array(self, features= None) -> np.array:
+
+        values_list = list(self.initial_values.values())
+
+        if features is not None:
+            values_list = [self.initial_values[feature] for feature in features]
+
+        if self.periods == 1:
+            return np.array(list(values_list))
+
+        return np.repeat(np.array(values_list)[np.newaxis, :], self.periods, axis=0)
+
+    def constant_initializer(self, value):
+        self.initial_values = dict.fromkeys(self.keys(), value)
+
+    def random_initializer(self, range_values: Union[tuple, Dict[str, tuple]], keys: List = None):
+        """ Randomly initialize values of the utility parameters based on true values and range """
+
+        assert len(range_values) == 2, 'range must have length'
+
+        if keys is None:
+            keys = self.keys()
+
+        random_utility_values = []
+
+        for feature in keys:
+            initial_value = float(self.true_values[feature])
+
+            if isinstance(range_values, tuple):
+                range_vals = range_values
+            else:
+                range_vals = range_values[feature]
+
+            random_utility_values.append(initial_value + np.random.uniform(*range_vals))
+
+        self.initial_values = dict(zip(keys, random_utility_values))
+
+        # print('New initial values', self.utility_function.initial_values)
+
+        return self.initial_values
+
+class UtilityParameters(Parameters):
+    """ Support utility function associated to multiple periods"""
+
+    def __init__(self,
+                 *args,
+                 **kwargs):
+        # TODO: change label features_Y by endogenous_feature and features_Z by exogenous_features.
+
+        # kwargs['features_Y'] = None
+
+        super().__init__(keys=['psc_factor', 'fixed_effect'], *args, **kwargs)
+
+
+class BPRParameters(Parameters):
+
+    def __init__(self, keys, *args, **kwargs):
+        kwargs['features_Z'] = None
+        kwargs['features_Y'] = None
+
+        super().__init__(keys=keys, *args, **kwargs)
+
+
+class ODParameters(Parameters):
+    """ Support OD with multiple periods """
+
+    def __init__(self,
+                 trainable,
+                 initial_values: np.array,
+                 historic_values: Dict[str, np.array] = None,
+                 true_values: np.array = None,
+                 shape=None,
+                 key='od',
+                 *args,
+                 **kwargs):
+        kwargs['features_Z'] = None
+        kwargs['features_Y'] = None
+
+        kwargs['initial_values'] = {key: initial_values}
+        kwargs['true_values'] = {key: true_values}
+
+        super().__init__(keys=[key], *args, **kwargs)
+
+        # self.shape = shape
+        self.trainable = trainable
+        self.historic_values = historic_values
+
+    @property
+    def historic_values_array(self):
+        # historic_od = tf.expand_dims(tf.constant(self.network.q.flatten()), axis=0)
+        # if len(list(self.historic_values.keys())) > 1:
+
+        historic_od = np.empty((self.periods, self.shape[0]))
+        historic_od[:] = np.nan
+
+        for period, od in self.historic_values.items():
+            historic_od[period - 1, :] = od
+
+        return historic_od
+        # return self._historic_values
+
+    @property
+    def key(self):
+        return self.keys()[0]
+
+    # @property
+    # def trainable(self):
+    #     return self.trainables[self.key]
+
+    @property
+    def shape(self):
+        return self.shapes[self.key]
+
+    @property
+    def initial_value(self):
+        return self._initial_values[self.key]
+
+    @property
+    def true_value(self):
+        return self._true_values[self.key]
+
+    def true_values_array(self) -> np.array:
+
+        if self.periods == 1:
+            return self.true_value
+
+        return np.repeat(self.true_value[np.newaxis, :], self.periods, axis=0)
+
+    def initial_values_array(self) -> np.array:
+
+        if self.periods == 1:
+            return self.initial_value
+
+        return np.repeat(self.initial_value[np.newaxis, :], self.periods, axis=0)
 
 
 class ODLUE(tf.keras.Model):
@@ -68,15 +279,20 @@ class ODLUE(tf.keras.Model):
     # iterations. As consequence, the matrices M and C would change frequently, which may be computationally intractable.
 
     def __init__(self,
-                 network: isl.networks.TNetwork,
-                 utility_function: UtilityFunction,
+                 network: TransportationNetwork,
+                 utility: UtilityParameters,
+                 od: ODParameters = None,
                  key: str = None,
                  equilibrator: Equilibrator = None,
                  column_generator: ColumnGenerator = None,
-                 trainables: Dict[str, bool] = None,
-                 inits: Dict[str, bool] = None,
                  *args,
                  **kwargs):
+
+        self._psc_factor = None
+        self._fixed_effect = None
+        self._theta = None
+        self._q = None
+        kwargs['dtype'] = kwargs.get('dtype', tf.float64)
 
         super().__init__(*args, **kwargs)
 
@@ -88,52 +304,11 @@ class ODLUE(tf.keras.Model):
         self.n_hours = None
 
         self.network = network
-        self.utility_function = utility_function
         self.equilibrator = equilibrator
         self.column_generator = column_generator
 
-        params = ['q', 'alpha', 'beta', 'theta', 'theta_links', 'psc_factor']
-
-        if trainables is None:
-            trainables = {}
-
-        # assert set(trainables.keys()).issubset(params)
-        self.trainables = {i: trainables.get(i, False) for i in params}
-
-        self.inits = inits
-
-        if self.inits is None:
-            self.inits = {}
-
-        assert set(self.inits.keys()).issubset(params)
-        # self.inits = {i: inits.get(i, None) for i in params}
-
-        q_init = self.network.q.flatten()
-
-        if self.trainables['q']:
-            q_init = self.inits.get('q', np.ones_like(q_init))
-            if tf.rank(q_init) == 2 and  q_init.shape[0] == 1:
-                q_init = q_init.flatten()
-
-        theta_init = np.array(list(self.utility_function.true_values.values()))
-
-        if self.trainables['theta'] or None in theta_init:
-            theta_init = self.inits.get('theta', np.array(list(self.utility_function.initial_values.values())))
-            if tf.rank(theta_init) == 2 and theta_init.shape[0] == 1:
-                #TODO: Review
-                theta_init = theta_init.flatten()
-
-        self._q = tf.Variable(np.sqrt(q_init), trainable=self.trainables['q'], name="q", dtype=self.dtype)
-        # self._q = self._q[tf.newaxis,:]
-
-        self._theta = tf.Variable(theta_init, trainable=self.trainables['theta'], name="theta", dtype=self.dtype)
-
-        # Initialize the psc_factor in a value different than zero to generate gradient
-        self._psc_factor = tf.Variable(0, trainable=self.trainables['psc_factor'], name="psc_factor", dtype=self.dtype)
-
-        # Link specific effect (act as an intercept)
-        self._theta_links = tf.Variable(tf.zeros(len(self.network.links), tf.float64),
-                                        trainable=self.trainables['theta_links'], name="theta_links", dtype=self.dtype)
+        self.utility = utility
+        self.od = od
 
         # self.linklist = [(link.key[0], link.key[1]) for link in self.network.links]
         self.n_nodes = self.network.get_n_nodes()
@@ -146,6 +321,43 @@ class ODLUE(tf.keras.Model):
         # self._M = tf.constant(self.network.M, dtype=self.dtype)
         # self._C = tf.constant(self.network.C, dtype=self.dtype)
         # # self.C = self.network.generate_C(self.M)
+
+        self.create_tensor_variables()
+
+    def create_tensor_variables(self, keys: Dict[str,bool] = None):
+
+        if keys is None:
+            keys = dict.fromkeys(['q','theta', 'psc_factor', 'fixed_effect'], True)
+
+        if keys.get('q', False):
+            self._q = tf.Variable(initial_value=np.sqrt(self.od.initial_values_array()),
+                                  trainable=self.od.trainable,
+                                  name=self.od.key,
+                                  dtype=self.dtype)
+        #
+        # TODO: Meantime, the feature parameters of the utility function can be or be not trained altogether based on
+        #  on the value of 'tt'. I should allows for separate estimation
+
+        if keys.get('theta', False):
+            self._theta = tf.Variable(initial_value=self.utility.initial_values_array(self.utility.features),
+                                      trainable=self.utility.trainables['tt'],
+                                      name="theta",
+                                      dtype=self.dtype)
+        if keys.get('psc_factor', False):
+            # Initialize the psc_factor in a value different than zero to generate gradient
+            self._psc_factor = tf.Variable(initial_value=self.utility.initial_values['psc_factor'],
+                                           trainable=self.utility.trainables['psc_factor'],
+                                           name=self.utility.parameters['psc_factor'].key,
+                                           dtype=self.dtype)
+
+        if keys.get('fixed_effect', False):
+            # Link specific effect (act as an intercept)
+            self._fixed_effect = tf.Variable(
+                initial_value=tf.constant(self.utility.initial_values['fixed_effect'],
+                                          shape=tf.TensorShape(self.utility.shapes['fixed_effect']), dtype=tf.float64),
+                trainable=self.utility.trainables['fixed_effect'],
+                name=self.utility.parameters['fixed_effect'].key,
+                dtype=self.dtype)
 
     @property
     def q(self):
@@ -160,17 +372,17 @@ class ODLUE(tf.keras.Model):
         )
 
     @property
-    def theta_links(self):
-        return self._theta_links
+    def fixed_effect(self):
+        return self._fixed_effect
 
     def project_theta(self, theta):
         clips_min = []
         clips_max = []
 
-        signs = self.utility_function.signs
+        signs = self.utility.signs
 
         if signs is not None:
-            for feature in self.utility_function.features:
+            for feature in self.utility.features:
 
                 sign = signs.get(feature)
 
@@ -184,7 +396,6 @@ class ODLUE(tf.keras.Model):
             return tf.clip_by_value(theta, clips_min, clips_max)
 
         return theta
-
 
     @property
     def psc_factor(self):
@@ -209,8 +420,8 @@ class ODLUE(tf.keras.Model):
 
     def path_size_correction(self, Vf):
 
-        return Vf + self.psc_factor*tf.math.log(tf.constant(
-            isl.paths.compute_path_size_factors(D = self.network.D, paths_od = self.network.paths_od).flatten()))
+        return Vf + self.psc_factor * tf.math.log(tf.constant(
+            isl.paths.compute_path_size_factors(D=self.network.D, paths_od=self.network.paths_od).flatten()))
 
         # return Vf + self.psc_factor * tf.constant(
         #     isl.paths.compute_path_size_factors(D=self.network.D, paths_od=self.network.paths_od).flatten())
@@ -234,9 +445,9 @@ class ODLUE(tf.keras.Model):
         """ TODO: Make the einsum operation in one line"""
 
         if tf.rank(self.theta) == 1:
-            return tf.einsum("ijkl,l -> ijk", X, self.theta) + self._theta_links
+            return tf.einsum("ijkl,l -> ijk", X, self.theta) + self.fixed_effect
 
-        return tf.einsum("ijkl,jl -> ijk", X, self.theta) + self._theta_links
+        return tf.einsum("ijkl,jl -> ijk", X, self.theta) + self.fixed_effect
 
     def path_utilities(self, V):
         return self.path_size_correction(tf.einsum("ijk,kl -> ijl", V, self.D))
@@ -316,7 +527,7 @@ class ODLUE(tf.keras.Model):
 
         self.n_days, self.n_hours, self.n_links, self.n_features = X.shape
 
-        self.n_features-=1
+        self.n_features -= 1
 
         X = tf.cast(X, self.dtype)
 
@@ -325,42 +536,54 @@ class ODLUE(tf.keras.Model):
 
 class AESUELOGIT(ODLUE):
 
-    #TODO: Move some functions to ODLUE
+    # TODO: Move some functions to ODLUE
 
     def __init__(self,
+                 bpr: Parameters = None,
                  *args,
                  **kwargs):
+
+        # BPR parameters
+        self._alpha = tf.float64
+        self._beta = tf.float64
+        self.bpr = bpr
 
         super().__init__(*args, **kwargs)
 
         # Free flow travel time
         self._tt_ff = np.array([link.bpr.tf for link in self.network.links])
 
+        # Tolerance parameter
         self._epsilon = 1e-12
 
-        alpha_init = np.array([link.bpr.alpha for link in self.network.links])
+        self.create_tensor_variables()
 
-        if self.trainables['alpha']:
-            alpha_init = self.inits.get('alpha', np.ones_like(alpha_init))
+    def create_tensor_variables(self, keys: Dict[str,bool] = None):
 
-        beta_init = np.array([link.bpr.beta for link in self.network.links])
+        ODLUE.create_tensor_variables(self, keys=keys)
 
-        if self.trainables['beta']:
-            beta_init = self.inits.get('beta', np.ones_like(beta_init))
+        if keys is None:
+            keys = dict.fromkeys(['alpha','beta'], True)
 
-        self._alpha = tf.Variable(np.log(alpha_init), trainable=self.trainables['alpha'], name="alpha",
-                                  dtype=self.dtype)
-        self._beta = tf.Variable(beta_init, trainable=self.trainables['beta'], name="beta", dtype=self.dtype)
+        if keys.get('alpha', False):
+            self._alpha = tf.Variable(np.log(self.bpr.parameters['alpha'].initial_value),
+                                      trainable=self.bpr.parameters['alpha'].trainable,
+                                      name=self.bpr.parameters['alpha'].key,
+                                      dtype=self.dtype)
+        if keys.get('beta', False):
+            self._beta = tf.Variable(np.log(self.bpr.parameters['beta'].initial_value),
+                                     trainable=self.bpr.parameters['beta'].trainable,
+                                     name=self.bpr.parameters['beta'].key,
+                                     dtype=self.dtype)
 
     @property
     def alpha(self):
-        # TODO: Check that this transformation still allows for perfect parameter recovery in experiments
         return tf.exp(self._alpha)
 
     @property
     def beta(self):
-        return tf.clip_by_value(self._beta, 0 + self._epsilon, 4)
-        # return tf.exp(self._beta)
+        # return tf.clip_by_value(self._beta, 0 + self._epsilon, 5)
+        return tf.exp(self._beta)
 
     @property
     def tt_ff(self):
@@ -382,42 +605,48 @@ class AESUELOGIT(ODLUE):
 
     def predict_flow(self, X):
 
-        self.tt_ff, feature_data = X[:, :, :, 0], X[:, :, :, 1:]
-
         # Add RELU layer to avoid negative flows into input of BPR function with exponent
-        return tf.keras.activations.relu(super(AESUELOGIT, self).call(feature_data))
+        return tf.keras.activations.relu(super(AESUELOGIT, self).call(X))
 
     def predict_equilibrium_flow(self,
                                  X: tf.constant,
                                  q: tf.constant,
-                                 utility_parameters: Dict[str,float],
+                                 utility: Dict[str, float],
                                  **kwargs) -> tf.constant:
 
         # Update values of utility function
-        self.utility_function.values = utility_parameters
+        self.utility.values = utility
 
         # Update BPR functions in the network object based on current estimate of BPR parameters
         link_keys = []
         alphas = self.alpha.numpy()
         betas = self.beta.numpy()
-        for link, alpha, beta in zip(self.network.links, alphas, betas):
+        tt_ffs = np.array(self.tt_ff).flatten()
+        links = self.network.links
+
+        if alphas.size == 1:
+            alphas = [alphas] * len(links)
+
+        if betas.size == 1:
+            betas = [betas] * len(links)
+
+        for link, tt_ff, alpha, beta in zip(self.network.links, tt_ffs, alphas, betas):
             link_keys.append(link.key)
             link.bpr.alpha = alpha
             link.bpr.beta = beta
-
-        # TODO: load self.tt_ff
+            link.bpr.tf = tt_ff
 
         # Load features in network (Convert columns of X in lists, and provide features_Z
-        features_Z = self.utility_function.features_Z
+        features_Z = self.utility.features_Z
 
         linkdata = pd.DataFrame({i: j for i, j in zip(features_Z, tf.unstack(X, axis=1))})
-        linkdata['link_key'] = [link.key for link in self.network.links]
+        linkdata['link_key'] = link_keys
         self.network.load_features_data(linkdata)
 
         results_eq = self.equilibrator.path_based_suelogit_equilibrium(
-            theta=self.utility_function.values,
+            theta=self.utility.values,
             q=np.expand_dims(q, 1),
-            features_Z=self.utility_function.features_Z,
+            features_Z=self.utility.features_Z,
             column_generation={'n_paths': None, 'paths_selection': None},
             **kwargs)
 
@@ -425,14 +654,23 @@ class AESUELOGIT(ODLUE):
 
         return tf.constant(list(results_eq['x'].values()))
 
-    def generalization_error(self, Y: tf.constant, X: tf.constant, **kwargs):
+    def generalization_error(self, Y: tf.constant, X: tf.constant, loss_metric = nrmse, **kwargs):
+
+        """
+
+        :param Y: tensor with endogenous observed measurements [link flows, travel times]
+        :param X: tensor with input system level data
+        :param loss_metric:
+        :param kwargs:
+        :return:
+        """
 
         q = self.q
         theta = self.theta
 
         random_day = np.random.randint(0, X.shape[0])
         hours = 1
-        if tf.rank(q)>1:
+        if tf.rank(q) > 1:
             hours = self.q.shape[0]
 
         sum_mse = 0
@@ -442,25 +680,25 @@ class AESUELOGIT(ODLUE):
 
             Xt = X[random_day, hour, :, :]
             # Update values of utility function
-            # self.utility_function.values = {k: v for k, v in zip(self.utility_function.features, list(self.theta))}
-            if tf.rank(theta)> 1:
+            # self.utility.values = {k: v for k, v in zip(self.utility.features, list(self.theta))}
+            if tf.rank(theta) > 1:
                 theta = self.theta[hour]
-            if tf.rank(q)> 1:
+            if tf.rank(q) > 1:
                 q = self.q[hour]
 
-            utility_parameters = {k: v for k, v in zip(self.utility_function.features, list(theta))}
+            utility_parameters = {k: v for k, v in zip(self.utility.features, list(theta))}
 
-            predicted_flow = self.predict_equilibrium_flow(Xt, utility_parameters = utility_parameters, q = q, **kwargs)
+            predicted_flow = self.predict_equilibrium_flow(Xt, utility=utility_parameters, q=q, **kwargs)
 
             # It is assumed the equilibrium flows only varies according to the hour of the day
             observed_flow = Y[:, hour, :, 1]
 
-            n = tf.cast(tf.math.count_nonzero(~tf.math.is_nan(observed_flow)),tf.float64)
+            n = tf.cast(tf.math.count_nonzero(~tf.math.is_nan(observed_flow)), tf.float64)
 
-            sum_mse += mse(actual=observed_flow, predicted=predicted_flow)*n
+            sum_mse += loss_metric(actual=observed_flow, predicted=predicted_flow) * n
             sum_n += n
 
-        return sum_mse/sum_n
+        return sum_mse / sum_n
 
     def historic_od(self, pred_q):
 
@@ -470,10 +708,11 @@ class AESUELOGIT(ODLUE):
         It assumes that the historic_od is only meaningful for the first hour
         """
 
-        historic_od = tf.expand_dims(tf.constant(self.network.q.flatten()),axis =0)
+        historic_od = tf.expand_dims(tf.constant(self.network.q.flatten()), axis=0)
         if tf.rank(pred_q) > 1:
-            extra_od_cols = tf.cast(tf.constant(float('nan'), shape = (pred_q.shape[0]-1,tf.size(historic_od))), tf.float64)
-            historic_od = tf.concat([historic_od, extra_od_cols], axis =0)
+            extra_od_cols = tf.cast(tf.constant(float('nan'), shape=(pred_q.shape[0] - 1, tf.size(historic_od))),
+                                    tf.float64)
+            historic_od = tf.concat([historic_od, extra_od_cols], axis=0)
 
         # return tf.expand_dims(tf.constant(self.network.q.flatten()),axis =0)
 
@@ -484,7 +723,7 @@ class AESUELOGIT(ODLUE):
                       Y,
                       lambdas: Dict[str, float],
                       # loss_metric = btcg_mse,
-                      loss_metric = mse,
+                      loss_metric=mse,
                       ):
         """
         Return a dictionary with keys defined as the different terms of the loss function
@@ -495,7 +734,7 @@ class AESUELOGIT(ODLUE):
 
         lambdas_vals = {'tt': 1.0, 'od': 0.0, 'theta': 0.0, 'flow': 0.0, 'bpr': 0.0}
 
-        assert set(lambdas.keys()).issubset(lambdas_vals.keys()), 'Invalid key in lambdas attribute'
+        assert set(lambdas.keys()).issubset(lambdas_vals.keys()), 'Invalid key in loss_weights attribute'
 
         for attr, val in lambdas.items():
             lambdas_vals[attr] = val
@@ -507,19 +746,26 @@ class AESUELOGIT(ODLUE):
                    'bpr': tf.constant(lambdas_vals['bpr'], name="lambda_bpr", dtype=tf.float64)
                    }
 
-        tt, flow = Y[:, :, :, 0], Y[:, :, :, 1]
-        pred_flow = self.predict_flow(X)
+        loss = dict.fromkeys(list(lambdas_vals.keys()) + ['total'], tf.constant(0, dtype=tf.float64))
 
-        loss = {'od': loss_metric(actual=self.historic_od(pred_q=self.q), predicted=self.q),
-                'theta': tf.reduce_mean(tf.norm(self.theta, 1)),
-                'flow': loss_metric(actual=tf.squeeze(flow), predicted=pred_flow),
-                'tt': loss_metric(actual=tf.squeeze(tt), predicted=self.link_traveltimes(pred_flow)),
-                'bpr': loss_metric(actual=tf.squeeze(tt), predicted=self.link_traveltimes(flow)),
-                'total': 0}
+        if Y.shape[-1] > 0:
+            tt, flow = Y[:, :, :, 0], Y[:, :, :, 1]
+            pred_flow = self.predict_flow(X)
+
+            loss = {'od': loss_metric(actual=self.historic_od(pred_q=self.q), predicted=self.q),
+                    'flow': loss_metric(actual=tf.squeeze(flow), predicted=pred_flow),
+                    'tt': loss_metric(actual=tf.squeeze(tt), predicted=self.link_traveltimes(pred_flow)),
+                    'theta': tf.reduce_mean(tf.norm(self.theta, 1)),
+                    'bpr': loss_metric(actual=tf.squeeze(tt), predicted=self.link_traveltimes(flow)),
+                    'total': tf.constant(0, tf.float64)}
 
         for key, val in lambdas_vals.items():
-            if val != 0:
+            # if any(list(map(lambda x: isinstance(val, x), [float, int]))):
+            if val > 0:
                 loss['total'] += lambdas[key] * loss[key]
+
+        # Add prefix "loss_"
+        loss = {'loss_' + k: v for k, v in loss.items()}
 
         return loss
 
@@ -531,6 +777,10 @@ class AESUELOGIT(ODLUE):
         return self.link_traveltimes(self.predict_flow(X))
 
     def normalized_losses(self, losses) -> pd.DataFrame:
+
+        # if losses[0]['total'] == 0:
+        #     return losses
+
         losses_df = []
         for epoch, loss in enumerate(losses):
             losses_df.append({'epoch': epoch})
@@ -538,11 +788,43 @@ class AESUELOGIT(ODLUE):
                 losses_df[-1][key] = [val.numpy()]
                 normalizer = losses[0][key].numpy()
                 if normalizer == 0:
-                    losses_df[-1][key] = 100
+                    losses_df[-1][key] = [100]
                 else:
-                    losses_df[-1][key] = losses_df[-1][key]/normalizer * 100
+                    losses_df[-1][key] = losses_df[-1][key] / normalizer * 100
 
         return pd.concat([pd.DataFrame(i) for i in losses_df], axis=0, ignore_index=True)
+
+    def get_parameters_estimates(self) -> pd.DataFrame:
+
+        # TODO: extend for multiperiod theta and multilinks alpha, beta
+        estimates = {}
+        estimates.update(dict(zip(self.utility.features, self.theta.numpy().flatten())))
+        estimates.update(dict(zip(['alpha', 'beta'], [float(self.alpha.numpy()), float(self.beta.numpy())])))
+        estimates['psc_factor'] = float(self.psc_factor.numpy())
+
+        return pd.DataFrame(estimates, index=[0])
+
+    def get_true_parameters(self) -> pd.DataFrame:
+
+        true_values = {k: v for k, v in {**self.bpr.true_values, **self.utility.true_values}.items()}
+
+        if set(['c','tt']).issubset(true_values.keys()):
+            true_values['vot'] = compute_vot(true_values)
+
+        return pd.DataFrame({'parameter': true_values.keys(), 'truth': true_values.values()})
+
+    # def best_results(self, results: pd.DataFrame):
+    #     return results[results['loss_total'].argmin()]
+
+    def split_results(self, results: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+
+        col_losses = ['epoch'] + [col for col in results.columns if any(x in col for x in ['loss_','error'])]
+
+        results_losses = results[col_losses]
+
+        results_parameters = results[['epoch'] + [col for col in results.columns if col not in col_losses]]
+
+        return results_parameters, results_losses
 
     def train(self,
               X_train: tf.constant,
@@ -550,9 +832,10 @@ class AESUELOGIT(ODLUE):
               X_val: tf.constant,
               Y_val: tf.constant,
               optimizer: tf.keras.optimizers,
-              lambdas: Dict[str, float],
+              loss_weights: Dict[str, float],
+              generalization_error: Dict[str,bool] = None,
               epochs=1,
-              batch_size=None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+              batch_size=None) -> tuple[pd.DataFrame, pd.DataFrame]:
 
         """ It assumes the first column of tensors X_train and X_val are the free flow travel times. The following
         columns are the travel times and exogenous features of each link """
@@ -560,8 +843,12 @@ class AESUELOGIT(ODLUE):
         if batch_size is None:
             batch_size = X_train.shape[0]
 
+        if generalization_error is None:
+            generalization_error = {'train':False, 'validation':False}
+
         epoch = 0
         t0 = time.time()
+        total_t0 = time.time()
 
         train_dataset = tf.data.Dataset.from_tensor_slices((X_train, Y_train))
         train_dataset = train_dataset.shuffle(buffer_size=1024).batch(batch_size)
@@ -570,81 +857,92 @@ class AESUELOGIT(ODLUE):
         # val_dataset = val_dataset.batch(batch_size)
 
         # Initial Losses
-        train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=lambdas)['total']
-        # val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=lambdas)['total']
+        train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights)['loss_total']
+        # val_loss = self.loss_function(X=X_val, Y=Y_val, loss_weights=loss_weights)['total']
 
         train_losses, val_losses = [], []
 
+        estimates = []
+
         while train_loss > 1e-8 and epoch <= epochs:
 
-            t0 = time.time()
+            estimates.append(self.get_parameters_estimates())
 
             if epoch % 1 == 0:
-                print(f"\nEpoch: {epoch}")
+                print(f"\nEpoch: {epoch}, n_train: {X_train.shape[0]}, n_test: {X_val.shape[0]}")
                 # print(f"{i}: loss={loss.numpy():0.4g}, theta = {model.theta.numpy()}")
-                train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=lambdas)
-                val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=lambdas)
+                train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights)
+                val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights)
 
-                # train_loss['generalization_error'] = self.generalization_error(X=X_train[:, :, :, 1:],Y=Y_train)
-                # val_loss['generalization_error'] = self.generalization_error(X=X_val[:, :, :, 1:],Y=Y_val)
+                if generalization_error.get('train',False):
+                    train_loss['generalization_error'] = self.generalization_error(X=X_train,Y=Y_train)
+                if generalization_error.get('validation', False):
+                    val_loss['generalization_error'] = self.generalization_error(X=X_val,Y=Y_val)
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)
 
                 print(
-                    f"{epoch}: train_loss={train_loss['total'].numpy():0.2g},  val_loss={val_loss['total'].numpy():0.2g}, "
-                    f"train_loss tt={train_loss['tt'].numpy():0.2g}, val_loss tt={val_loss['tt'].numpy():0.2g}, "
-                    f"train_loss flow={(train_loss['flow']).numpy():0.2g}, val_loss flow={val_loss['flow'].numpy():0.2g}, "
-                    f"train_loss bpr={train_loss['bpr'].numpy():0.2g}, val_loss bpr={val_loss['bpr'].numpy():0.2g}, "
-                    
-                    # f"val generalization error ={val_loss['generalization_error'].numpy():0.2g}, "
-                    
-                    f"avg abs diff demand ={np.nanmean(np.abs(self.q - self.historic_od(self.q))):0.2g}, "
-                    f"theta = {self.theta.numpy()}, psc_factor = {self.psc_factor.numpy()}, "
+                    f"{epoch}: train_loss={train_loss['loss_total'].numpy():0.2g},  "
+                    f"val_loss={val_loss['loss_total'].numpy():0.2g}, "
+                    f"train_loss tt={train_loss['loss_tt'].numpy():0.2g}, "
+                    f"val_loss tt={val_loss['loss_tt'].numpy():0.2g}, "
+                    f"train_loss flow={(train_loss['loss_flow']).numpy():0.2g}, "
+                    f"val_loss flow={val_loss['loss_flow'].numpy():0.2g}, "
+                    f"train_loss bpr={train_loss['loss_bpr'].numpy():0.2g}, "
+                    f"val_loss bpr={val_loss['loss_bpr'].numpy():0.2g}, "
+                    f"theta = {self.theta.numpy()}, "
+                    f"vot = {np.array(compute_vot(self.get_parameters_estimates().to_dict(orient='records')[0])):0.2f}, "
+                    f"psc_factor = {self.psc_factor.numpy()}, "
+                    f"avg abs theta fixed effect = {np.mean(np.abs(self.fixed_effect)):0.2g}, "
                     f"avg alpha = {np.mean(self.alpha.numpy()):0.2g}, avg beta = {np.mean(self.beta.numpy()):0.2g}, "
-                    f"time: {time.time() - t0: 0.2g}")
+                    f"avg abs diff demand ={np.nanmean(np.abs(self.q - self.historic_od(self.q))):0.2g}, "
+                    f"time: {time.time() - t0: 0.1f}")
+
+                if generalization_error.get('train',False):
+                    print(f"train generalization error ={train_loss['generalization_error'].numpy():0.2g}, ")
+                if generalization_error.get('validation', False):
+                    print(f"val generalization error ={val_loss['generalization_error'].numpy():0.2g}, ")
 
                 t0 = time.time()
 
-            # Gradient based learning
+            if train_loss['loss_total'] > 1e-8 and epoch <= epochs:
 
-            for step, (X_batch_train, Y_batch_train) in enumerate(train_dataset):
-                with tf.GradientTape() as tape:
-                    train_loss = self.loss_function(X=X_batch_train, Y=Y_batch_train, lambdas=lambdas)['total']
+                # Gradient based learning
 
-                grads = tape.gradient(train_loss, self.trainable_variables)
+                for step, (X_batch_train, Y_batch_train) in enumerate(train_dataset):
+                    with tf.GradientTape() as tape:
+                        train_loss = \
+                            self.loss_function(X=X_batch_train, Y=Y_batch_train, lambdas=loss_weights)['loss_total']
 
-                # # Apply some clipping (tf.linalg.normad
-                # grads = [tf.clip_by_norm(g, 2) for g in grads]
+                    grads = tape.gradient(train_loss, self.trainable_variables)
 
-                # # The normalization of gradient of NGD can be hardcoded as
-                # if isinstance(optimizer, NGD):
-                #     grads = [g/tf.linalg.norm(g, 2) for g in grads]
+                    # # Apply some clipping (tf.linalg.normad
+                    # grads = [tf.clip_by_norm(g, 2) for g in grads]
 
-                optimizer.apply_gradients(zip(grads, self.trainable_variables))
+                    # # The normalization of gradient of NGD can be hardcoded as
+                    # if isinstance(optimizer, NGD):
+                    #     grads = [g/tf.linalg.norm(g, 2) for g in grads]
+
+                    optimizer.apply_gradients(zip(grads, self.trainable_variables))
 
             epoch += 1
 
-            # TODO: Column generation (limit the options to more fundamental ones)
-            self.column_generator.generate_paths(theta=self.theta,
-                                                 network=self.network
-                                                 )
+            if self.column_generator is not None:
+                # TODO: Column generation (limit the options to more fundamental ones)
+                self.column_generator.generate_paths(theta=self.theta,
+                                                     network=self.network
+                                                     )
 
             # TODO: Path set selection (confirm if necessary)
-
-        train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=lambdas)['total']
-        val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=lambdas)['total']
-        print(f"{epoch} [FINAL]: train loss={train_loss.numpy():0.4g},val loss={val_loss.numpy():0.4g}, "
-              f"'training time={time.time()-t0:0.1f}")
 
         train_losses_df = self.normalized_losses(train_losses)
         val_losses_df = self.normalized_losses(val_losses)
 
+        train_results_df = pd.concat([train_losses_df, pd.concat(estimates, axis=0).reset_index(drop=True)], axis=1)
+        val_results_df = val_losses_df
+
         # train_losses_df['generalization_error'] = train_generalization_errors
         # val_losses_df['generalization_error'] = val_generalization_errors
 
-        return train_losses_df, val_losses_df
-
-
-
-
+        return train_results_df, val_results_df
