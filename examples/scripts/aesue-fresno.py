@@ -47,13 +47,13 @@ fresno_network = build_fresno_network()
 # TODO: option to specify path to read OD matrix
 read_OD(network=fresno_network, sparse=True)
 
-# For quick testing
-# Q = fresno_network.load_OD(sparsify_OD(fresno_network.Q, prop_od_pairs=0.99))
-# load_k_shortest_paths(network=fresno_network, k=2, update_incidence_matrices=True)
-
 ## Read paths
 # read_paths(network=fresno_network, update_incidence_matrices=True, filename='paths-fresno.csv')
 read_paths(network=fresno_network, update_incidence_matrices=True, filename = 'paths-full-model-fresno.csv')
+
+# For quick testing
+# Q = fresno_network.load_OD(sparsify_OD(fresno_network.Q, prop_od_pairs=0.99))
+# load_k_shortest_paths(network=fresno_network, k=2, update_incidence_matrices=True)
 
 ## Read spatiotemporal data
 folderpath = isl.config.dirs['read_network_data'] + 'links/spatiotemporal-data/'
