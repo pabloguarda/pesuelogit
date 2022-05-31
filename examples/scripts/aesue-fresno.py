@@ -186,10 +186,10 @@ _LR = 5e-2  # Default is 1e-3. With 1e-1, training becomes unstable
 
 # models = dict(zip(['m1', 'm2', 'm3', 'm4'], True))
 models = dict.fromkeys(['m1', 'm2', 'm3', 'm4'], False)
-# models['m1'] = True
+models['m1'] = True
 # models['m2'] = True
 # models['m3'] = True
-models['m4'] = True
+# models['m4'] = True
 
 equilibrator = Equilibrator(
     network=fresno_network,
@@ -245,6 +245,7 @@ if models['m1']:
 
     train_losses_dfs['model_1'], val_losses_dfs['model_1'] = model_1.train(
         X_train, Y_train, X_val, Y_val,
+        # generalization_error={'train': False, 'validation': True},
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
         loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 1, 'bpr': 0},
@@ -288,6 +289,7 @@ if models['m2']:
         X_train, Y_train, X_val, Y_val,
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
+        # generalization_error={'train': False, 'validation': True},
         loss_weights={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'bpr': 0},
         epochs=_EPOCHS)
 
@@ -327,6 +329,7 @@ if models['m3']:
     train_losses_dfs['model_3'], val_losses_dfs['model_3'] = model_3.train(
         X_train, Y_train, X_val, Y_val,
         optimizer=optimizer,
+        # generalization_error={'train': False, 'validation': True},
         batch_size=_BATCH_SIZE,
         loss_weights={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'bpr': 0},
         epochs=_EPOCHS)
@@ -376,6 +379,7 @@ if models['m4']:
     train_losses_dfs['model_4'], val_losses_dfs['model_4'] = model_4.train(
         X_train, Y_train, X_val, Y_val,
         optimizer=optimizer,
+        # generalization_error={'train': False, 'validation': True},
         batch_size=_BATCH_SIZE,
         loss_weights={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'bpr': 0},
         epochs=_EPOCHS)
