@@ -3,7 +3,7 @@ import seaborn as sns
 import pandas as pd
 import numpy as np
 from isuelogit.estimation import compute_vot
-from typing import Union, Dict, List
+from typing import Union, Dict, List, Tuple
 from isuelogit.mytypes import Matrix
 
 
@@ -28,8 +28,6 @@ def plot_convergence_estimates(estimates: pd.DataFrame,
 
     ax.hlines(y=true_values.values,
               xmin=estimates['epoch'].min(), xmax=estimates['epoch'].max(), colors=colors, linestyle='--')
-
-    plt.show()
 
 
 def plot_predictive_performance(train_losses: pd.DataFrame,
@@ -143,6 +141,8 @@ def plot_levels_experiment(results: pd.DataFrame,
 
 
 def plot_heatmap_demands(Qs: Dict[str, Matrix],
+                         subplots_dims: Tuple,
+                         figsize: Tuple,
                          vmin=None,
                          vmax=None,
                          folderpath: str = None,
@@ -155,7 +155,7 @@ def plot_heatmap_demands(Qs: Dict[str, Matrix],
     Assume list 'Qs' has 4 elements
     """
 
-    fig, ax = plt.subplots(2, 2, figsize=(16, 16))
+    fig, ax = plt.subplots(*subplots_dims, figsize=figsize)
 
     for Q, title, axi in zip(Qs.values(),Qs.keys(),  ax.flat):
 
