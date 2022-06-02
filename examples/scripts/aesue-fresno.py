@@ -22,7 +22,7 @@ print('main dir:', main_dir)
 isl.config.dirs['read_network_data'] = "input/network-data/fresno/"
 
 # Internal modules
-from src.aesuelogit.models import UtilityParameters, BPRParameters, ODParameters, AESUELOGIT, NGD
+from src.aesuelogit.models import UtilityParameters, BPRParameters, ODParameters, AETSUELOGIT, NGD
 from src.aesuelogit.visualizations import plot_predictive_performance
 from src.aesuelogit.networks import load_k_shortest_paths, read_paths, build_fresno_network, \
     Equilibrator, sparsify_OD, ColumnGenerator, read_OD
@@ -232,7 +232,7 @@ if models['m1']:
                                  historic_values={1: fresno_network.q.flatten()},
                                  trainable=False)
 
-    model_1 = AESUELOGIT(
+    model_1 = AETSUELOGIT(
         key='model_1',
         network=fresno_network,
         dtype=tf.float64,
@@ -274,7 +274,7 @@ if models['m2']:
                                  historic_values={1: fresno_network.q.flatten()},
                                  trainable=True)
 
-    model_2 = AESUELOGIT(
+    model_2 = AETSUELOGIT(
         key='model_2',
         network=fresno_network,
         dtype=tf.float64,
@@ -315,7 +315,7 @@ if models['m3']:
                                  # historic_values={1: fresno_network.q.flatten()},
                                  trainable=True)
 
-    model_3 = AESUELOGIT(
+    model_3 = AETSUELOGIT(
         key='model_3',
         network=fresno_network,
         dtype=tf.float64,
@@ -365,7 +365,7 @@ if models['m4']:
                                  initial_values=fresno_network.q.flatten(),
                                  trainable=True)
 
-    model_4 = AESUELOGIT(
+    model_4 = AETSUELOGIT(
         key='model_4',
         network=fresno_network,
         dtype=tf.float64,
