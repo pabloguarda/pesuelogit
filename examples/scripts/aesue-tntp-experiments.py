@@ -2,6 +2,9 @@
 import os
 from pathlib import Path
 import random
+import isuelogit as isl
+import numpy as np
+import tensorflow as tf
 
 # Path management
 main_dir = str(Path(os.path.abspath('')).parents[1])
@@ -11,10 +14,10 @@ print('main dir:', main_dir)
 # isl.config.dirs['read_network_data'] = "input/network-data/SiouxFalls/"
 
 # Internal modules
-from src.aesuelogit.models import UtilityParameters, BPRParameters, ODParameters, AESUELOGIT, NGD
+from src.aesuelogit.models import UtilityParameters, BPRParameters, ODParameters, AETSUELOGIT, NGD
 from src.aesuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator, ColumnGenerator
 from src.aesuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data
-from src.aesuelogit.experiments import *
+from src.aesuelogit.experiments import MultidayExperiment, ConvergenceExperiment
 
 # Seed for reproducibility
 _SEED = 2022
@@ -134,7 +137,7 @@ if run_experiment['convergence']:
                                  historic_values={1: tntp_network.q.flatten()},
                                  trainable=False)
 
-    model = AESUELOGIT(
+    model = AETSUELOGIT(
         key='model',
         network=tntp_network,
         equilibrator=equilibrator,
@@ -176,7 +179,7 @@ if run_experiment['multiday']:
                                  historic_values={1: tntp_network.q.flatten()},
                                  trainable=True)
 
-    model = AESUELOGIT(
+    model = AETSUELOGIT(
         key='model',
         network=tntp_network,
         equilibrator=equilibrator,
