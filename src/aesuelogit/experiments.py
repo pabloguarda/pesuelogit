@@ -121,6 +121,8 @@ class ConvergenceExperiment(NetworkExperiment):
         super().__init__(**kwargs)
 
     def run(self, batch_size, epochs, loss_weights, test_size=0):
+        Qs = {'true': self.model.network.OD.Q_true}
+
         X_train, X_val, Y_train, Y_val = self.train_test_split(test_size=test_size, random_state=42)
 
         train_results_df, val_results_df = self.model.train(
@@ -128,7 +130,7 @@ class ConvergenceExperiment(NetworkExperiment):
             optimizer=self.optimizer,
             batch_size=batch_size,
             loss_weights=loss_weights,
-            generalization_error ={'train': True},
+            generalization_error ={'train': True, 'validation':True},
             epochs=epochs)
 
         train_results_estimates, train_results_losses = self.model.split_results(results=train_results_df)
@@ -141,6 +143,11 @@ class ConvergenceExperiment(NetworkExperiment):
              if k in train_results_estimates.columns})
 
         plot_convergence_estimates(estimates=train_results_estimates, true_values=true_values)
+
+        plot_heatmap_demands(Qs={**Qs,**{'estimated':tf.sparse.to_dense(self.model.Q).numpy()}},
+                             vmin=np.min(Qs['true']), vmax=np.max(Qs['true']), subplots_dims=(1, 2), figsize = (9,4))
+
+        plt.show()
 
 
 class MultidayExperiment(NetworkExperiment):
@@ -256,17 +263,15 @@ class MultidayExperiment(NetworkExperiment):
 
                 # self.write_replicate_table(df=results_replicate, filename='inference', replicate=replicate)
 
-                fig = plot_levels_experiment(
-                    results=results_experiment,
-                    noise=self.noise,
-                    folder=self.dirs['replicate_folder'],
-                    range_initial_values=range_initial_values)
-
-                plot_heatmap_demands(Qs = Qs, vmin = np.min(Qs['true']), vmax = np.max(Qs['true']))
-
                 if show_replicate_plot:
+                    fig = plot_levels_experiment(
+                        results=results_experiment,
+                        noise=self.noise,
+                        folder=self.dirs['replicate_folder'],
+                        range_initial_values=range_initial_values)
+
                     plt.show()
-                else:
+
                     plt.close(fig)
 
         plot_levels_experiment(
@@ -274,6 +279,9 @@ class MultidayExperiment(NetworkExperiment):
             noise=self.noise,
             folder=self.dirs['experiment_folder'],
             range_initial_values=range_initial_values)
+
+        plot_heatmap_demands(Qs=Qs, vmin=np.min(Qs['true']), vmax=np.max(Qs['true']),
+                             subplots_dims=(2, 2), figsize = (9,8))
 
         plt.show()
 

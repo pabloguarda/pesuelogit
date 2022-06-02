@@ -29,11 +29,11 @@ tf.random.set_seed(_SEED)
 # Experiments
 list_experiments = ['convergence', 'multiday', 'noisy_counts', 'noisy_od', 'ill_scaled_od']
 
-# run_experiment = dict.fromkeys(list_experiments,True)
-run_experiment = dict.fromkeys(list_experiments, False)
+run_experiment = dict.fromkeys(list_experiments,True)
+# run_experiment = dict.fromkeys(list_experiments, False)
 
 # run_experiment['convergence'] = True
-run_experiment['multiday'] = True
+# run_experiment['multiday'] = True
 # run_experiment['noisy_counts'] = True
 # run_experiment['noisy_od'] = True
 # run_experiment['ill_scaled_od'] = True
@@ -135,7 +135,7 @@ if run_experiment['convergence']:
                                  initial_values=tntp_network.q.flatten(),
                                  true_values=tntp_network.q.flatten(),
                                  historic_values={1: tntp_network.q.flatten()},
-                                 trainable=False)
+                                 trainable=True)
 
     model = AETSUELOGIT(
         key='model',
@@ -156,6 +156,7 @@ if run_experiment['convergence']:
         Y=Y)
 
     convergence_experiment.run(epochs=_EPOCHS,
+                               test_size=0.2,
                                batch_size=_BATCH_SIZE,
                                loss_weights={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'bpr': 1},)
 
@@ -164,16 +165,16 @@ if run_experiment['multiday']:
     optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
-                                   # initial_values={'alpha': 0.1, 'beta': 1},
-                                   initial_values={'alpha': 0.15, 'beta': 4},
+                                   initial_values={'alpha': 0.1, 'beta': 1},
+                                   # initial_values={'alpha': 0.15, 'beta': 4},
                                    true_values={'alpha': 0.15, 'beta': 4},
-                                   trainables=dict.fromkeys(['alpha', 'beta'], False),
+                                   trainables=dict.fromkeys(['alpha', 'beta'], True),
                                    )
 
     od_parameters = ODParameters(key='od',
                                  periods=1,
                                  # initial_values=100*np.ones_like(tntp_network.q).flatten(),
-                                 initial_values=0.6*tntp_network.q.flatten(),
+                                 initial_values=0.5*tntp_network.q.flatten(),
                                  # initial_values=tntp_network.q.flatten(),
                                  true_values=tntp_network.q.flatten(),
                                  historic_values={1: tntp_network.q.flatten()},
@@ -199,7 +200,9 @@ if run_experiment['multiday']:
         Y=Y)
 
     multiday_experiment.run(epochs=_EPOCHS,
-                            replicates = 10,
+                            replicates = 3,
+                            replicate_report=False,
+                            show_replicate_plot=True,
                             range_initial_values= (-1,1),
                             batch_size=_BATCH_SIZE,
                             levels = [10,50,100],

@@ -184,7 +184,7 @@ _EPOCHS = 3
 _BATCH_SIZE = 8
 _LR = 5e-2  # Default is 1e-3. With 1e-1, training becomes unstable
 
-# models = dict(zip(['m1', 'm2', 'm3', 'm4'], True))
+# models = dict.fromkeys(['m1', 'm2', 'm3', 'm4'], True)
 models = dict.fromkeys(['m1', 'm2', 'm3', 'm4'], False)
 models['m1'] = True
 # models['m2'] = True
@@ -253,6 +253,8 @@ if models['m1']:
 
     plot_predictive_performance(train_losses=train_losses_dfs['model_1'], val_losses=val_losses_dfs['model_1'])
 
+    plt.show()
+
     print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(model_1.theta.numpy())))}")
     print(f"alpha = {model_1.alpha: 0.2f}, beta  = {model_1.beta: 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(model_1.q - fresno_network.q.flatten())): 0.2f}")
@@ -295,6 +297,8 @@ if models['m2']:
 
     plot_predictive_performance(train_losses=train_losses_dfs['model_2'], val_losses=val_losses_dfs['model_2'])
 
+    plt.show()
+
     print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(model_2.theta.numpy())))}")
     print(f"alpha = {model_2.alpha: 0.2f}, beta  = {model_2.beta: 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(model_2.q - fresno_network.q.flatten())): 0.2f}")
@@ -335,6 +339,8 @@ if models['m3']:
         epochs=_EPOCHS)
 
     plot_predictive_performance(train_losses=train_losses_dfs['model_3'], val_losses=val_losses_dfs['model_3'])
+
+    plt.show()
 
     print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(model_3.theta.numpy())))}")
     print(f"alpha = {model_3.alpha: 0.2f}, beta  = {model_3.beta: 0.2f}")
@@ -385,6 +391,8 @@ if models['m4']:
         epochs=_EPOCHS)
 
     plot_predictive_performance(train_losses=train_losses_dfs['model_4'], val_losses=val_losses_dfs['model_4'])
+
+    plt.show()
 
     print(f"features = {utility_parameters.features}")
     print(f"theta = {model_4.theta.numpy()}")
