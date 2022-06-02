@@ -14,6 +14,7 @@ from .networks import Equilibrator, ColumnGenerator, TransportationNetwork
 from isuelogit.estimation import Parameter, compute_vot
 from .descriptive_statistics import error, mse, rmse, nrmse, btcg_mse
 
+
 class NGD(tf.keras.optimizers.SGD):
     """ NGD: Normalizaed Gradient Descent """
 
@@ -119,7 +120,7 @@ class Parameters(isl.estimation.UtilityFunction):
             for feature, value in values.items():
                 self.parameters[feature].shape = values[feature]
 
-    def true_values_array(self, features = None) -> np.array:
+    def true_values_array(self, features=None) -> np.array:
 
         values_list = list(self.true_values.values())
 
@@ -131,7 +132,7 @@ class Parameters(isl.estimation.UtilityFunction):
 
         return np.repeat(np.array(values_list)[np.newaxis, :], self.periods, axis=0)
 
-    def initial_values_array(self, features= None) -> np.array:
+    def initial_values_array(self, features=None) -> np.array:
 
         values_list = list(self.initial_values.values())
 
@@ -171,6 +172,7 @@ class Parameters(isl.estimation.UtilityFunction):
         # print('New initial values', self.utility_function.initial_values)
 
         return self.initial_values
+
 
 class UtilityParameters(Parameters):
     """ Support utility function associated to multiple periods"""
@@ -267,45 +269,48 @@ class ODParameters(Parameters):
         return np.repeat(self.initial_value[np.newaxis, :], self.periods, axis=0)
 
 
-class ODLUE(tf.keras.Model):
-
-    # ODLUE is an extension of the logit utility estimation (LUE) problem solved in the isuelogit package.  It is
-    # fed with link features of multiple time days and it allows for the estimation of the OD matrix and of the
-    # utility function parameters. It is framed as a computational graph which facilitates the computation of gradient
-    # of the loss function.
-
-    # The current implementation assumes that the path sets and the OD matrix is the same for all time days.
-    # However, if the path set were updated dynamically, the path sets would vary among time days and od pairs over
-    # iterations. As consequence, the matrices M and C would change frequently, which may be computationally intractable.
+class AESUELOGIT(tf.keras.Model):
+    """ Auto-encoded stochastic user equilibrium with logit assignment"""
 
     def __init__(self,
                  network: TransportationNetwork,
                  utility: UtilityParameters,
-                 od: ODParameters = None,
+                 endogenous_flows = False,
                  key: str = None,
+                 od: ODParameters = None,
+                 bpr: Parameters = None,
                  equilibrator: Equilibrator = None,
                  column_generator: ColumnGenerator = None,
                  *args,
                  **kwargs):
 
-        self._psc_factor = None
-        self._fixed_effect = None
-        self._theta = None
-        self._q = None
+        self.observed_traveltimes = None
+        self._flows = None
         kwargs['dtype'] = kwargs.get('dtype', tf.float64)
 
         super().__init__(*args, **kwargs)
 
-        self.key = key
+        # Parameters (i.e. tf variables)
+        self._alpha = tf.float64
+        self._beta = tf.float64
+        self.bpr = bpr
+        self._psc_factor = None
+        self._fixed_effect = None
+        self._theta = None
+        self._q = None
 
-        self.n_features = None
-        self.n_links = None
-        self.n_days = None
-        self.n_hours = None
+        self.endogenous_flows = endogenous_flows
+
+        self.key = key
 
         self.network = network
         self.equilibrator = equilibrator
         self.column_generator = column_generator
+        
+        self.n_features = None
+        self.n_links = len(self.network.links)
+        self.n_days = None
+        self.n_hours = None
 
         self.utility = utility
         self.od = od
@@ -322,12 +327,37 @@ class ODLUE(tf.keras.Model):
         # self._C = tf.constant(self.network.C, dtype=self.dtype)
         # # self.C = self.network.generate_C(self.M)
 
+        # Free flow travel time
+        self._tt_ff = np.array([link.bpr.tf for link in self.network.links])
+
+        # Tolerance parameter
+        self._epsilon = 1e-12
+
         self.create_tensor_variables()
 
-    def create_tensor_variables(self, keys: Dict[str,bool] = None):
+    def create_tensor_variables(self, keys: Dict[str, bool] = None):
 
         if keys is None:
-            keys = dict.fromkeys(['q','theta', 'psc_factor', 'fixed_effect'], True)
+            keys = dict.fromkeys(['q', 'theta', 'psc_factor', 'fixed_effect', 'alpha', 'beta'], True)
+
+        # Link specific effect (act as an intercept)
+        if self.endogenous_flows:
+            self._flows = tf.Variable(
+                initial_value=tf.constant(tf.zeros(self.n_links), dtype=tf.float64),
+                trainable= self.endogenous_flows,
+                name='flows',
+                dtype=self.dtype)
+
+        if keys.get('alpha', False):
+            self._alpha = tf.Variable(np.log(self.bpr.parameters['alpha'].initial_value),
+                                      trainable=self.bpr.parameters['alpha'].trainable,
+                                      name=self.bpr.parameters['alpha'].key,
+                                      dtype=self.dtype)
+        if keys.get('beta', False):
+            self._beta = tf.Variable(np.log(self.bpr.parameters['beta'].initial_value),
+                                     trainable=self.bpr.parameters['beta'].trainable,
+                                     name=self.bpr.parameters['beta'].key,
+                                     dtype=self.dtype)
 
         if keys.get('q', False):
             self._q = tf.Variable(initial_value=np.sqrt(self.od.initial_values_array()),
@@ -358,6 +388,18 @@ class ODLUE(tf.keras.Model):
                 trainable=self.utility.trainables['fixed_effect'],
                 name=self.utility.parameters['fixed_effect'].key,
                 dtype=self.dtype)
+
+        # if keys.get('traveltime', False):
+        #     self._traveltime = tf.Variable(np.log(self.bpr.parameters['alpha'].initial_value),
+        #                               trainable=self.bpr.parameters['alpha'].trainable,
+        #                               name=self.bpr.parameters['alpha'].key,
+        #                               dtype=self.dtype)
+
+
+
+    @property
+    def flows(self):
+        return tf.math.pow(self._flows, 2)
 
     @property
     def q(self):
@@ -445,9 +487,23 @@ class ODLUE(tf.keras.Model):
         """ TODO: Make the einsum operation in one line"""
 
         if tf.rank(self.theta) == 1:
-            return tf.einsum("ijkl,l -> ijk", X, self.theta) + self.fixed_effect
+            return tf.einsum("ijkl,l -> ijk", X, self.theta[1:])+ self.theta[0]*self.traveltimes() + self.fixed_effect
 
-        return tf.einsum("ijkl,jl -> ijk", X, self.theta) + self.fixed_effect
+        return tf.einsum("ijkl,jl -> ijk", X, self.theta[:,1:]) + self.fixed_effect + self.theta[:,0]*self.traveltimes()
+
+    def link_traveltimes(self, x):
+        """
+        Link performance function
+        """
+        # Links capacities
+        k = np.array([link.bpr.k for link in self.network.links])
+
+        return self.tt_ff * (1 + self.alpha * tf.math.pow(x / k, self.beta))
+
+    def traveltimes(self):
+        """ Return tensor variable associated to endogenous travel times (assumed dependent on link flows)"""
+
+        return self.link_traveltimes(x=self.flows)
 
     def path_utilities(self, V):
         return self.path_size_correction(tf.einsum("ijk,kl -> ijl", V, self.D))
@@ -520,62 +576,6 @@ class ODLUE(tf.keras.Model):
     def link_flows(self, f):
         return tf.einsum("ijk,lk -> ijl", f, self.D)
 
-    def call(self, X):
-        """
-        X is tensor of dimension (n_days, n_hours, n_links, n_features)
-        """
-
-        self.n_days, self.n_hours, self.n_links, self.n_features = X.shape
-
-        self.n_features -= 1
-
-        X = tf.cast(X, self.dtype)
-
-        return self.link_flows(self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X)))))
-
-
-class AESUELOGIT(ODLUE):
-
-    # TODO: Move some functions to ODLUE
-
-    def __init__(self,
-                 bpr: Parameters = None,
-                 *args,
-                 **kwargs):
-
-        # BPR parameters
-        self._alpha = tf.float64
-        self._beta = tf.float64
-        self.bpr = bpr
-
-        super().__init__(*args, **kwargs)
-
-        # Free flow travel time
-        self._tt_ff = np.array([link.bpr.tf for link in self.network.links])
-
-        # Tolerance parameter
-        self._epsilon = 1e-12
-
-        self.create_tensor_variables()
-
-    def create_tensor_variables(self, keys: Dict[str,bool] = None):
-
-        ODLUE.create_tensor_variables(self, keys=keys)
-
-        if keys is None:
-            keys = dict.fromkeys(['alpha','beta'], True)
-
-        if keys.get('alpha', False):
-            self._alpha = tf.Variable(np.log(self.bpr.parameters['alpha'].initial_value),
-                                      trainable=self.bpr.parameters['alpha'].trainable,
-                                      name=self.bpr.parameters['alpha'].key,
-                                      dtype=self.dtype)
-        if keys.get('beta', False):
-            self._beta = tf.Variable(np.log(self.bpr.parameters['beta'].initial_value),
-                                     trainable=self.bpr.parameters['beta'].trainable,
-                                     name=self.bpr.parameters['beta'].key,
-                                     dtype=self.dtype)
-
     @property
     def alpha(self):
         return tf.exp(self._alpha)
@@ -593,26 +593,11 @@ class AESUELOGIT(ODLUE):
     def tt_ff(self, value):
         self._tt_ff = value
 
-    def link_traveltimes(self, x):
-        """
-        Link performance function
-        """
-
-        # Links capacities
-        k = np.array([link.bpr.k for link in self.network.links])
-
-        return self.tt_ff * (1 + self.alpha * tf.math.pow(x / k, self.beta))
-
-    def predict_flow(self, X):
-
-        # Add RELU layer to avoid negative flows into input of BPR function with exponent
-        return tf.keras.activations.relu(super(AESUELOGIT, self).call(X))
-
-    def predict_equilibrium_flow(self,
-                                 X: tf.constant,
-                                 q: tf.constant,
-                                 utility: Dict[str, float],
-                                 **kwargs) -> tf.constant:
+    def equilibrium_link_flows(self,
+                               X: tf.constant,
+                               q: tf.constant,
+                               utility: Dict[str, float],
+                               **kwargs) -> tf.constant:
 
         # Update values of utility function
         self.utility.values = utility
@@ -654,7 +639,7 @@ class AESUELOGIT(ODLUE):
 
         return tf.constant(list(results_eq['x'].values()))
 
-    def generalization_error(self, Y: tf.constant, X: tf.constant, loss_metric = nrmse, **kwargs):
+    def generalization_error(self, Y: tf.constant, X: tf.constant, loss_metric=nrmse, **kwargs):
 
         """
 
@@ -688,7 +673,7 @@ class AESUELOGIT(ODLUE):
 
             utility_parameters = {k: v for k, v in zip(self.utility.features, list(theta))}
 
-            predicted_flow = self.predict_equilibrium_flow(Xt, utility=utility_parameters, q=q, **kwargs)
+            predicted_flow = self.equilibrium_link_flows(Xt, utility=utility_parameters, q=q, **kwargs)
 
             # It is assumed the equilibrium flows only varies according to the hour of the day
             observed_flow = Y[:, hour, :, 1]
@@ -732,32 +717,44 @@ class AESUELOGIT(ODLUE):
 
         """
 
-        lambdas_vals = {'tt': 1.0, 'od': 0.0, 'theta': 0.0, 'flow': 0.0, 'bpr': 0.0}
+        lambdas_vals = {'tt': 1.0, 'od': 0.0, 'theta': 0.0, 'flow': 0.0, 'bpr': 0.0, 'eq_flow': 0.0, 'eq_tt': 0.0}
 
         assert set(lambdas.keys()).issubset(lambdas_vals.keys()), 'Invalid key in loss_weights attribute'
 
         for attr, val in lambdas.items():
             lambdas_vals[attr] = val
 
-        lambdas = {'od': tf.constant(lambdas_vals['od'], name="lambda_od", dtype=tf.float64),
-                   'theta': tf.constant(lambdas_vals['theta'], name="lambda_theta", dtype=tf.float64),
-                   'flow': tf.constant(lambdas_vals['flow'], name="lambda_flow", dtype=tf.float64),
-                   'tt': tf.constant(lambdas_vals['tt'], name="lambda_tt", dtype=tf.float64),
-                   'bpr': tf.constant(lambdas_vals['bpr'], name="lambda_bpr", dtype=tf.float64)
-                   }
-
         loss = dict.fromkeys(list(lambdas_vals.keys()) + ['total'], tf.constant(0, dtype=tf.float64))
 
         if Y.shape[-1] > 0:
-            tt, flow = Y[:, :, :, 0], Y[:, :, :, 1]
-            pred_flow = self.predict_flow(X)
+            self.observed_traveltimes, self.observed_flows = Y[:, :, :, 0], Y[:, :, :, 1]
+            predicted_flow = self.compute_link_flows(X)
+            predicted_traveltimes = self.link_traveltimes(predicted_flow)
 
             loss = {'od': loss_metric(actual=self.historic_od(pred_q=self.q), predicted=self.q),
-                    'flow': loss_metric(actual=tf.squeeze(flow), predicted=pred_flow),
-                    'tt': loss_metric(actual=tf.squeeze(tt), predicted=self.link_traveltimes(pred_flow)),
+                    'flow': loss_metric(actual=tf.squeeze(self.observed_flows), predicted=predicted_flow),
+                    'tt': loss_metric(actual=self.observed_traveltimes, predicted=predicted_traveltimes),
                     'theta': tf.reduce_mean(tf.norm(self.theta, 1)),
-                    'bpr': loss_metric(actual=tf.squeeze(tt), predicted=self.link_traveltimes(flow)),
+                    'bpr': loss_metric(actual=tf.squeeze(self.observed_traveltimes), predicted=predicted_traveltimes),
                     'total': tf.constant(0, tf.float64)}
+
+        if self.endogenous_flows:
+            loss['eq_flow'] = loss_metric(actual=self.flows, predicted=predicted_flow)
+
+        if self.endogenous_traveltimes:
+            loss['eq_tt'] = loss_metric(actual=self.traveltimes(), predicted=tf.squeeze(predicted_traveltimes))
+
+        # self.traveltimes()
+        # tf.squeeze(predicted_traveltimes)[0]
+
+        lambdas = {k: tf.constant(v, name="lambda_" + k, dtype=tf.float64) for k, v in lambdas_vals.items()}
+
+        # lambdas = {'od': tf.constant(lambdas_vals['od'], name="lambda_od", dtype=tf.float64),
+        #            'theta': tf.constant(lambdas_vals['theta'], name="lambda_theta", dtype=tf.float64),
+        #            'flow': tf.constant(lambdas_vals['flow'], name="lambda_flow", dtype=tf.float64),
+        #            'tt': tf.constant(lambdas_vals['tt'], name="lambda_tt", dtype=tf.float64),
+        #            'bpr': tf.constant(lambdas_vals['bpr'], name="lambda_bpr", dtype=tf.float64)
+        #            }
 
         for key, val in lambdas_vals.items():
             # if any(list(map(lambda x: isinstance(val, x), [float, int]))):
@@ -768,13 +765,6 @@ class AESUELOGIT(ODLUE):
         loss = {'loss_' + k: v for k, v in loss.items()}
 
         return loss
-
-    def call(self, X):
-        """
-        Output is matrix of dimension (n_days, n_links)
-        """
-
-        return self.link_traveltimes(self.predict_flow(X))
 
     def normalized_losses(self, losses) -> pd.DataFrame:
 
@@ -808,7 +798,7 @@ class AESUELOGIT(ODLUE):
 
         true_values = {k: v for k, v in {**self.bpr.true_values, **self.utility.true_values}.items()}
 
-        if set(['c','tt']).issubset(true_values.keys()):
+        if set(['c', 'tt']).issubset(true_values.keys()):
             true_values['vot'] = compute_vot(true_values)
 
         return pd.DataFrame({'parameter': true_values.keys(), 'truth': true_values.values()})
@@ -818,7 +808,7 @@ class AESUELOGIT(ODLUE):
 
     def split_results(self, results: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
-        col_losses = ['epoch'] + [col for col in results.columns if any(x in col for x in ['loss_','error'])]
+        col_losses = ['epoch'] + [col for col in results.columns if any(x in col for x in ['loss_', 'error'])]
 
         results_losses = results[col_losses]
 
@@ -833,7 +823,7 @@ class AESUELOGIT(ODLUE):
               Y_val: tf.constant,
               optimizer: tf.keras.optimizers,
               loss_weights: Dict[str, float],
-              generalization_error: Dict[str,bool] = None,
+              generalization_error: Dict[str, bool] = None,
               epochs=1,
               batch_size=None) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
@@ -844,7 +834,7 @@ class AESUELOGIT(ODLUE):
             batch_size = X_train.shape[0]
 
         if generalization_error is None:
-            generalization_error = {'train':False, 'validation':False}
+            generalization_error = {'train': False, 'validation': False}
 
         epoch = 0
         t0 = time.time()
@@ -874,35 +864,42 @@ class AESUELOGIT(ODLUE):
                 train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights)
                 val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights)
 
-                if generalization_error.get('train',False):
-                    train_loss['generalization_error'] = self.generalization_error(X=X_train,Y=Y_train)
+                if generalization_error.get('train', False):
+                    train_loss['generalization_error'] = self.generalization_error(X=X_train, Y=Y_train)
                 if generalization_error.get('validation', False):
-                    val_loss['generalization_error'] = self.generalization_error(X=X_val,Y=Y_val)
+                    val_loss['generalization_error'] = self.generalization_error(X=X_val, Y=Y_val)
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)
 
-                print(
-                    f"{epoch}: train_loss={train_loss['loss_total'].numpy():0.2g},  "
-                    f"val_loss={val_loss['loss_total'].numpy():0.2g}, "
-                    f"train_loss tt={train_loss['loss_tt'].numpy():0.2g}, "
-                    f"val_loss tt={val_loss['loss_tt'].numpy():0.2g}, "
-                    f"train_loss flow={(train_loss['loss_flow']).numpy():0.2g}, "
-                    f"val_loss flow={val_loss['loss_flow'].numpy():0.2g}, "
-                    f"train_loss bpr={train_loss['loss_bpr'].numpy():0.2g}, "
-                    f"val_loss bpr={val_loss['loss_bpr'].numpy():0.2g}, "
+                print(f"{epoch}: train_loss={float(train_loss['loss_total'].numpy()):0.1g}, "
+                    f"val_loss={float(val_loss['loss_total'].numpy()):0.2g}, "
+                    f"train_loss tt={float(train_loss['loss_tt'].numpy()):0.2g}, "
+                    f"val_loss tt={float(val_loss['loss_tt'].numpy()):0.2g}, "
+                    f"train_loss flow={float(train_loss['loss_flow'].numpy()):0.2g}, "
+                    f"val_loss flow={float(val_loss['loss_flow'].numpy()):0.2g}, "
+                    f"train_loss bpr={float(train_loss['loss_bpr'].numpy()):0.2g}, "
+                    f"val_loss bpr={float(val_loss['loss_bpr'].numpy()):0.2g}, "
                     f"theta = {self.theta.numpy()}, "
                     f"vot = {np.array(compute_vot(self.get_parameters_estimates().to_dict(orient='records')[0])):0.2f}, "
                     f"psc_factor = {self.psc_factor.numpy()}, "
                     f"avg abs theta fixed effect = {np.mean(np.abs(self.fixed_effect)):0.2g}, "
                     f"avg alpha = {np.mean(self.alpha.numpy()):0.2g}, avg beta = {np.mean(self.beta.numpy()):0.2g}, "
-                    f"avg abs diff demand ={np.nanmean(np.abs(self.q - self.historic_od(self.q))):0.2g}, "
-                    f"time: {time.time() - t0: 0.1f}")
+                    f"avg abs diff demand ={np.nanmean(np.abs(self.q - self.historic_od(self.q))):0.2g}, ",end = '')
 
-                if generalization_error.get('train',False):
-                    print(f"train generalization error ={train_loss['generalization_error'].numpy():0.2g}, ")
+                if train_loss.get('loss_eq_tt', False):
+                    print(f"train tt equilibrium loss ={float(train_loss['loss_eq_tt'].numpy()):0.2g}, ", end = '')
+
+                if train_loss.get('loss_eq_flow', False):
+                    print(f"train flow equilibrium loss ={float(train_loss['loss_eq_flow'].numpy()):0.2g}, ", end = '')
+
+                if generalization_error.get('train', False):
+                    print(f"train generalization error ={train_loss['generalization_error'].numpy():0.2g}, ", end = '')
                 if generalization_error.get('validation', False):
-                    print(f"val generalization error ={val_loss['generalization_error'].numpy():0.2g}, ")
+                    print(f"val generalization error ={val_loss['generalization_error'].numpy():0.2g}, ", end = '')
+
+                print(f"time: {time.time() - t0: 0.1f}", end = '')
+
 
                 t0 = time.time()
 
@@ -917,7 +914,7 @@ class AESUELOGIT(ODLUE):
 
                     grads = tape.gradient(train_loss, self.trainable_variables)
 
-                    # # Apply some clipping (tf.linalg.normad
+                    # # Apply some clipping (tf.linalg.normada
                     # grads = [tf.clip_by_norm(g, 2) for g in grads]
 
                     # # The normalization of gradient of NGD can be hardcoded as
@@ -946,3 +943,111 @@ class AESUELOGIT(ODLUE):
         # val_losses_df['generalization_error'] = val_generalization_errors
 
         return train_results_df, val_results_df
+
+    def compute_link_flows(self,X):
+
+        return self.link_flows(self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X)))))
+
+
+    def call(self, X):
+        """
+        X: tensor of link features of dimension (n_daus, n_hours, n_links, n_features)
+
+        return tensor of dimension (n_days, n_links)
+        """
+
+        return self.compute_link_flows(X)
+
+class AETSUELOGIT(AESUELOGIT):
+    """ Auto-encoded travel time based stochastic user equilibrium with logit assignment"""
+
+    def __init__(self,
+                 endogenous_traveltimes = True,
+                 *args,
+                 **kwargs):
+
+        kwargs.update({'endogenous_flows': False})
+
+        self.endogenous_traveltimes = endogenous_traveltimes
+
+        super().__init__(*args, **kwargs)
+
+        # self.create_tensor_variables()
+
+    def create_tensor_variables(self, keys: Dict[str, bool] = None):
+
+        if self.endogenous_traveltimes:
+
+            self._traveltimes = tf.Variable(
+                # initial_value=tf.math.sqrt(tf.constant(tf.zeros(self.n_links, dtype=tf.float64))),
+                initial_value=tf.math.sqrt(tf.constant(self.tt_ff)),
+                trainable= self.endogenous_traveltimes,
+                name='traveltimes',
+                dtype=self.dtype)
+
+        AESUELOGIT.create_tensor_variables(self, keys=keys)
+
+    def traveltimes(self):
+        """
+        Return exogenous or endogenous travel times via tensorflow constant or variables, respectively
+        """
+
+        if self.endogenous_traveltimes:
+            # return tensorflow variable of dimension (n_hours, n_links) and initialized using average over hours-links
+            return tf.math.pow(self._traveltimes,2)
+
+        else:
+            #TODO: tensorflow constant from Y tensor
+           
+            pass
+
+
+
+    def call(self, X):
+        """
+
+        X: tensor of link features of dimension (n_daus, n_hours, n_links, n_features)
+
+        return matrix of dimension (n_days, n_links)
+        """
+
+        return self.link_traveltimes(self.compute_link_flows(X))
+
+
+class ODLUE(AESUELOGIT):
+
+    # ODLUE is an extension of the logit utility estimation (LUE) problem solved in the isuelogit package.  It is
+    # fed with link features of multiple time days and it allows for the estimation of the OD matrix and of the
+    # utility function parameters. It is framed as a computational graph which facilitates the computation of gradient
+    # of the loss function.
+
+    # The current implementation assumes that the path sets and the OD matrix is the same for all time days.
+    # However, if the path set were updated dynamically, the path sets would vary among time days and od pairs over
+    # iterations. As consequence, the matrices M and C would change frequently, which may be computationally intractable.
+
+    def __init__(self,
+                 *args,
+                 **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # self.create_tensor_variables()
+
+    def create_tensor_variables(self, keys: Dict[str, bool] = None):
+        if keys is None:
+            keys = dict.fromkeys(['q', 'theta', 'psc_factor', 'fixed_effect'], True)
+            # keys = dict.fromkeys(['alpha', 'beta'], False)
+
+        AESUELOGIT.create_tensor_variables(self, keys=keys)
+
+    def call(self, X):
+        """
+        X is tensor of dimension (n_days, n_hours, n_links, n_features)
+        """
+
+        self.n_days, self.n_hours, self.n_links, self.n_features = X.shape
+
+        self.n_features -= 1
+
+        X = tf.cast(X, self.dtype)
+
+        return self.compute_link_flows(X)
