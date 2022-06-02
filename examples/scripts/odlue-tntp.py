@@ -14,10 +14,10 @@ import isuelogit as isl
 # from isuelogit.equilibrium import LUE_Equilibrator
 
 # from src.spad.ueae import StochasticNetworkLoading
-# from src.aesuelogit.aesue import simulate_features, build_tntp_network, simulate_suelogit_data, UtilityFunction, \
+# from src.aesuelogit.aesue import simulate_features, build_tntp_network, simulate_suelogit_data, UtilityParameters, \
 #     ODLUE, Equilibrator, get_design_tensor, get_y_tensor
 
-from src.aesuelogit.models import UtilityFunction, ODLUE, Equilibrator, NGD
+from src.aesuelogit.models import UtilityParameters, ODLUE, Equilibrator, NGD
 from src.aesuelogit.networks import build_tntp_network, build_small_network
 from src.aesuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data, simulate_features
 
@@ -26,8 +26,13 @@ main_dir = str(Path(os.path.abspath('')).parents[0])
 os.chdir(main_dir)
 print('main dir:',main_dir)
 
-tntp_network = build_tntp_network(network_name='SiouxFalls')
+network_name = 'SiouxFalls'
+tntp_network = build_tntp_network(network_name=network_name)
 # tntp_network = build_small_network(network_name = 'Yang')
+
+## Read OD matrix
+Q = isl.reader.read_tntp_od(network_name=network_name)
+tntp_network.load_OD(Q=Q)
 
 # Paths
 isl.factory.PathsGenerator().load_k_shortest_paths(network=tntp_network, k=2)
@@ -43,14 +48,14 @@ exogenous_features = simulate_features(links=tntp_network.links,
                                        range=(0, 1),
                                        n_days = n_days)
 
-utility_function = UtilityFunction(features_Y=['tt'],
+utility_parameters = UtilityParameters(features_Y=['tt'],
                                    features_Z=features_Z,
                                    true_values={'tt': -1, 'c': -6, 's': -3},
                                    initial_values={'tt': -5, 'c': -6, 's': -3}
                                    )
 
 equilibrator = Equilibrator(network=tntp_network,
-                            utility_function=utility_function,
+                            utility=utility_parameters,
                             # uncongested_mode=True,
                             # exogenous_traveltimes=True,
                             accuracy=1e-10,
@@ -82,15 +87,15 @@ model = ODLUE(
     network = tntp_network,
     dtype=tf.float64,
     trainables= {'q': True, 'theta': True},
-    utility_function = utility_function,
+    utility = utility_parameters,
     inits = {'q': np.ones_like(tntp_network.q.flatten()),
-             'theta': np.array(list(utility_function.initial_values.values()))},
+             'theta': np.array(list(utility_parameters.initial_values.values()))},
 )
 
 print(model.trainable_variables)
 print(f"q = {model.q}")
 
-# true_model = ODLUE(network = tntp_network, dtype=tf.float64, utility_function = utility_function)
+# true_model = ODLUE(network = tntp_network, dtype=tf.float64, utility = utility_parameters)
 
 # print("Difference between observed and predicted counts:", f"{np.sum(np.squeeze(counts_data)-true_model(input_data))}")
 #
@@ -125,7 +130,7 @@ print(f"{i} [FINAL]: loss={loss.numpy():0.4g}")
 
 m_true = np.array([link.bpr.alpha * link.bpr.tf for link in tntp_network.links])
 
-print(f"true theta = {utility_function.true_values}",f", theta = {model.theta.numpy()}")
+print(f"true theta = {utility_parameters.true_values}",f", theta = {model.theta.numpy()}")
 # print(f"m = {model.m}", '\n', f"true m = {m_true}")
 # print(f"b = {model.b}")
 # print(f"OD demand = {model.q}", '\n', f"True OD = {tntp_network.q.flatten()}")
