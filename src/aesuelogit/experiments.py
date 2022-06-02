@@ -243,7 +243,7 @@ class MultidayExperiment(NetworkExperiment):
                         bias=results_parameters.eval('estimate-truth'),
                         loss=float(results_losses['loss_total']),
                         # nrmse_train=float(nrmse(actual=noisy_flow_train, predicted=self.model.predict_flow(X_train))),
-                        nrmse_val=float(nrmse(actual=flow_val, predicted=self.model.predict_flow(X_val))),
+                        nrmse_val=float(nrmse(actual=flow_val, predicted=self.model.compute_link_flows(X_val))),
                         generalization_val = float(self.model.generalization_error(Y = Y_val, X = X_val,loss_metric = nrmse))
                     )
 
