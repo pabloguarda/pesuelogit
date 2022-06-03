@@ -123,29 +123,47 @@ def traveltime_imputation(raw_data: pd.DataFrame):
 
     return raw_data.copy()
 
+def impute_average_traveltime(data: pd.DataFrame):
+
+    indices = (data['link_type'] == 'LWRLK') & (data['tt_avg'].isna())
+
+    # # We impute the average as 2 times the value of free flow travel time but we may determine this
+    # # factor based on a regression or correlation
+    factor_ff_to_avg = 2
+    data.loc[indices, 'tt_avg'] = factor_ff_to_avg*data.loc[indices, 'tt_ff']
+
+    return data
 
 
 def data_curation(raw_data: pd.DataFrame):
 
     raw_data.loc[raw_data['counts'] <= 0, "counts"] = np.nan
 
-    # Replace free flow travel times with nans with travel time reported in original nework files
-    indices = set(raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'].isna())].index)
-    raw_data.loc[indices, 'tt_ff'] = raw_data.loc[indices, 'tf']
+    # Replace free flow travel times with nans
+    indices = (raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'].isna())
+
+    # with travel time reported in original nework files
+    # raw_data.loc[indices, 'tt_ff'] = raw_data.loc[indices, 'tf']
+    #Or alternatively, use average free flow speed:
+    average_reference_speed = raw_data[raw_data['speed_ref_avg']>0]['speed_ref_avg'].mean()
+    raw_data.loc[indices, 'tt_ff'] = raw_data.loc[indices, 'length']/average_reference_speed
 
     # raw_data = traveltime_imputation(raw_data)
 
-    raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'] == 0), 'tt_ff'] = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'] != 0), 'tt_ff'].mean()
+    raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'] == 0), 'tt_ff'] \
+        = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'] != 0), 'tt_ff'].mean()
 
-    raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] == 0), 'tt_avg'] = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] != 0), 'tt_avg'].mean()
+    raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] == 0), 'tt_avg'] \
+        = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] != 0), 'tt_avg'].mean()
 
     #raw_data[['tt_ff', 'tt_avg', 'tt_avg_imputed', 'link_type']]#
 
     # Travel time average cannot be lower than free flow travel time or to have nan entries
-    indices = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & ((raw_data['tt_avg']<raw_data['tt_ff']) | raw_data['tt_avg'].isna())].index
-    # We impute the average as 2 times the value of free flow travel time but we may determine this
-    # factor based on a regression or correlation
-    factor_ff_to_avg = 2
-    raw_data.loc[set(indices), 'tt_avg'] = factor_ff_to_avg*raw_data.loc[set(indices), 'tt_ff']
+    indices = (raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg']< raw_data['tt_ff'])
+    # raw_data.loc[indices,'tt_avg'] = float('nan')
+    # alternatively, we reduce the average travel times in the conflicting observations to match the free flow travel time
+    raw_data.loc[indices, 'tt_avg'] = raw_data.loc[indices, 'tt_ff']
+
+    # raw_data = impute_average_traveltime(raw_data)
 
     return raw_data
