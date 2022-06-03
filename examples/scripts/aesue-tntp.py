@@ -12,7 +12,7 @@ import tensorflow as tf
 import isuelogit as isl
 
 from src.aesuelogit.visualizations import plot_predictive_performance
-from src.aesuelogit.models import UtilityParameters, AETSUELOGIT, NGD, BPRParameters, ODParameters
+from src.aesuelogit.models import UtilityParameters, AESUELOGIT, AETSUELOGIT, NGD, BPRParameters, ODParameters
 from src.aesuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator, ColumnGenerator
 from src.aesuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data
 
@@ -52,9 +52,9 @@ features_Z.extend(features_sparse)
 
 utility_parameters = UtilityParameters(features_Y=['tt'],
                                        features_Z=features_Z,
-                                       trainables={'psc_factor': False, 'fixed_effect': False, 'tt':True},
+                                       trainables={'psc_factor': False, 'fixed_effect': False, 'tt':False},
                                        # true_values={'tt': -1, 'c': -6, 's': -3},
-                                       # initial_values={'tt': -1, 'c': -6, 's': -3}
+                                       initial_values={'tt': -1, 'c': -6, 's': -3}
                                        )
 
 # Prepare the training and validation dataset.
@@ -120,8 +120,11 @@ od_parameters = ODParameters(key='od',
                              true_values=tntp_network.q.flatten(),
                              trainable=False)
 
+# Travel time based autoencoder
+
 model_1 = AETSUELOGIT(
     key='model_1',
+    endogenous_traveltimes = True,
     network=tntp_network,
     dtype=tf.float64,
     equilibrator=equilibrator,
@@ -139,4 +142,28 @@ train_losses_dfs['model_1'], val_losses_dfs['model_1'] = model_1.train(
     loss_weights={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'bpr': 0, 'eq_tt': 1e5},
     epochs=_EPOCHS)
 
-plot_predictive_performance(train_losses=train_losses_dfs['model_1'], val_losses=val_losses_dfs['model_1'])
+# plot_predictive_performance(train_losses=train_losses_dfs['model_1'], val_losses=val_losses_dfs['model_1'])
+
+# Link flow based autoencoder
+
+model_2 = AESUELOGIT(
+    key='model_2',
+    endogenous_flows = True,
+    network=tntp_network,
+    dtype=tf.float64,
+    equilibrator=equilibrator,
+    column_generator=column_generator,
+    utility=utility_parameters,
+    bpr=bpr_parameters,
+    od=od_parameters
+)
+
+train_losses_dfs['model_2'], val_losses_dfs['model_2'] = model_2.train(
+    X_train, Y_train, X_val, Y_val,
+    # generalization_error={'train': False, 'validation': True},
+    optimizer=optimizer,
+    batch_size=_BATCH_SIZE,
+    loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'bpr': 0, 'eq_tt': 0, 'eq_flow': 1e5},
+    epochs=_EPOCHS)
+
+plot_predictive_performance(train_losses=train_losses_dfs['model_2'], val_losses=val_losses_dfs['model_2'])
