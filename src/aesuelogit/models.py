@@ -310,7 +310,7 @@ class AESUELOGIT(tf.keras.Model):
         self.n_features = None
         self.n_links = len(self.network.links)
         self.n_days = None
-        self.n_hours = None
+        self.n_hours = 1
 
         self.utility = utility
         self.od = od
@@ -333,8 +333,6 @@ class AESUELOGIT(tf.keras.Model):
         # Tolerance parameter
         self._epsilon = 1e-12
 
-        self.create_tensor_variables()
-
     def create_tensor_variables(self, keys: Dict[str, bool] = None):
 
         if keys is None:
@@ -343,7 +341,8 @@ class AESUELOGIT(tf.keras.Model):
         # Link specific effect (act as an intercept)
         if self.endogenous_flows:
             self._flows = tf.Variable(
-                initial_value=tf.constant(tf.zeros(self.n_links), dtype=tf.float64),
+                initial_value=tf.math.sqrt(tf.constant(tf.zeros([self.n_hours,self.n_links], dtype=tf.float64))),
+                # initial_value=tf.constant(tf.zeros([self.n_hours,self.n_links]), dtype=tf.float64),
                 trainable= self.endogenous_flows,
                 name='flows',
                 dtype=self.dtype)
@@ -389,15 +388,6 @@ class AESUELOGIT(tf.keras.Model):
                 name=self.utility.parameters['fixed_effect'].key,
                 dtype=self.dtype)
 
-        # if keys.get('traveltime', False):
-        #     self._traveltime = tf.Variable(np.log(self.bpr.parameters['alpha'].initial_value),
-        #                               trainable=self.bpr.parameters['alpha'].trainable,
-        #                               name=self.bpr.parameters['alpha'].key,
-        #                               dtype=self.dtype)
-
-
-
-    @property
     def flows(self):
         return tf.math.pow(self._flows, 2)
 
@@ -503,7 +493,7 @@ class AESUELOGIT(tf.keras.Model):
     def traveltimes(self):
         """ Return tensor variable associated to endogenous travel times (assumed dependent on link flows)"""
 
-        return self.link_traveltimes(x=self.flows)
+        return self.link_traveltimes(x=self.flows())
 
     def path_utilities(self, V):
         return self.path_size_correction(tf.einsum("ijk,kl -> ijl", V, self.D))
@@ -727,7 +717,7 @@ class AESUELOGIT(tf.keras.Model):
         loss = dict.fromkeys(list(lambdas_vals.keys()) + ['total'], tf.constant(0, dtype=tf.float64))
 
         if Y.shape[-1] > 0:
-            self.observed_traveltimes, self.observed_flows = Y[:, :, :, 0], Y[:, :, :, 1]
+            self.observed_traveltimes, self.observed_flows = tf.unstack(Y,axis = -1)
             predicted_flow = self.compute_link_flows(X)
             predicted_traveltimes = self.link_traveltimes(predicted_flow)
 
@@ -738,11 +728,14 @@ class AESUELOGIT(tf.keras.Model):
                     'bpr': loss_metric(actual=tf.squeeze(self.observed_traveltimes), predicted=predicted_traveltimes),
                     'total': tf.constant(0, tf.float64)}
 
-        if self.endogenous_flows:
-            loss['eq_flow'] = loss_metric(actual=self.flows, predicted=predicted_flow)
+        # tf.squeeze(self.observed_flows)[0]-predicted_flow[0]
 
-        if self.endogenous_traveltimes:
-            loss['eq_tt'] = loss_metric(actual=self.traveltimes(), predicted=tf.squeeze(predicted_traveltimes))
+        #TODO: allows for computation even when they are not endogenous (create method flow())
+        if self.endogenous_flows:
+            loss['eq_flow'] = loss_metric(actual=self.flows(), predicted=predicted_flow)
+
+        # if self.endogenous_traveltimes:
+        loss['eq_tt'] = loss_metric(actual=self.traveltimes(), predicted=tf.squeeze(predicted_traveltimes))
 
         # self.traveltimes()
         # tf.squeeze(predicted_traveltimes)[0]
@@ -836,6 +829,17 @@ class AESUELOGIT(tf.keras.Model):
         if generalization_error is None:
             generalization_error = {'train': False, 'validation': False}
 
+        X_train, Y_train, X_val, Y_val = map(lambda x: tf.cast(x,tf.float64),[X_train, Y_train, X_val, Y_val])
+
+        self.n_days, self.n_hours, self.n_links, self.n_features = X_train.shape
+
+        self.create_tensor_variables()
+
+        if self.endogenous_flows:
+            # Smart initialization is performed running a single pass of traffic assignment under initial theta and q
+            self._flows.assign(tf.math.sqrt(tf.reduce_mean(self.call(X_train),axis = 0)))
+            # self._flows.assign(tf.squeeze(tf.reduce_mean(self.call(tf.unstack(Y_train,axis = -1)[1]),axis=-1)))
+
         epoch = 0
         t0 = time.time()
         total_t0 = time.time()
@@ -854,7 +858,7 @@ class AESUELOGIT(tf.keras.Model):
 
         estimates = []
 
-        while train_loss > 1e-8 and epoch <= epochs:
+        while epoch <= epochs:
 
             estimates.append(self.get_parameters_estimates())
 
@@ -872,7 +876,7 @@ class AESUELOGIT(tf.keras.Model):
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)
 
-                print(f"{epoch}: train_loss={float(train_loss['loss_total'].numpy()):0.1g}, "
+                print(f"\n{epoch}: train_loss={float(train_loss['loss_total'].numpy()):0.1g}, "
                     f"val_loss={float(val_loss['loss_total'].numpy()):0.2g}, "
                     f"train_loss tt={float(train_loss['loss_tt'].numpy()):0.2g}, "
                     f"val_loss tt={float(val_loss['loss_tt'].numpy()):0.2g}, "
@@ -898,7 +902,7 @@ class AESUELOGIT(tf.keras.Model):
                 if generalization_error.get('validation', False):
                     print(f"val generalization error ={val_loss['generalization_error'].numpy():0.2g}, ", end = '')
 
-                print(f"time: {time.time() - t0: 0.1f}", end = '')
+                print(f"time: {time.time() - t0: 0.1f}")
 
 
                 t0 = time.time()
@@ -972,15 +976,13 @@ class AETSUELOGIT(AESUELOGIT):
 
         super().__init__(*args, **kwargs)
 
-        # self.create_tensor_variables()
-
     def create_tensor_variables(self, keys: Dict[str, bool] = None):
 
         if self.endogenous_traveltimes:
 
             self._traveltimes = tf.Variable(
                 # initial_value=tf.math.sqrt(tf.constant(tf.zeros(self.n_links, dtype=tf.float64))),
-                initial_value=tf.math.sqrt(tf.constant(self.tt_ff)),
+                initial_value=tf.math.sqrt(tf.tile(tf.expand_dims(self.tt_ff,0),tf.constant([self.n_hours,1]))),
                 trainable= self.endogenous_traveltimes,
                 name='traveltimes',
                 dtype=self.dtype)
@@ -1030,8 +1032,6 @@ class ODLUE(AESUELOGIT):
                  **kwargs):
         super().__init__(*args, **kwargs)
 
-        # self.create_tensor_variables()
-
     def create_tensor_variables(self, keys: Dict[str, bool] = None):
         if keys is None:
             keys = dict.fromkeys(['q', 'theta', 'psc_factor', 'fixed_effect'], True)
@@ -1043,11 +1043,5 @@ class ODLUE(AESUELOGIT):
         """
         X is tensor of dimension (n_days, n_hours, n_links, n_features)
         """
-
-        self.n_days, self.n_hours, self.n_links, self.n_features = X.shape
-
-        self.n_features -= 1
-
-        X = tf.cast(X, self.dtype)
 
         return self.compute_link_flows(X)
