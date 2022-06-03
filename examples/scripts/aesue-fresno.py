@@ -22,7 +22,7 @@ print('main dir:', main_dir)
 isl.config.dirs['read_network_data'] = "input/network-data/fresno/"
 
 # Internal modules
-from src.aesuelogit.models import UtilityParameters, BPRParameters, ODParameters, AETSUELOGIT, NGD
+from src.aesuelogit.models import UtilityParameters, BPRParameters, ODParameters, AESUELOGIT, AETSUELOGIT, NGD
 from src.aesuelogit.visualizations import plot_predictive_performance
 from src.aesuelogit.networks import load_k_shortest_paths, read_paths, build_fresno_network, \
     Equilibrator, sparsify_OD, ColumnGenerator, read_OD
@@ -47,11 +47,11 @@ fresno_network = build_fresno_network()
 # TODO: option to specify path to read OD matrix
 read_OD(network=fresno_network, sparse=True)
 
-## Read paths
+# Read paths
 # read_paths(network=fresno_network, update_incidence_matrices=True, filename='paths-fresno.csv')
 read_paths(network=fresno_network, update_incidence_matrices=True, filename = 'paths-full-model-fresno.csv')
 
-# For quick testing
+# # For quick testing
 # Q = fresno_network.load_OD(sparsify_OD(fresno_network.Q, prop_od_pairs=0.99))
 # load_k_shortest_paths(network=fresno_network, k=2, update_incidence_matrices=True)
 
@@ -88,6 +88,9 @@ df['tt_avg'] = np.where(df['link_type'] != 'LWRLK', 0,df['length']/df['speed_his
 df.loc[(df.link_type == "LWRLK") & (df.speed_hist_avg == 0),'tt_avg'] = float('nan')
 
 # df.link_type.value_counts()
+df['tt_avg'].isna().sum()
+df['tt_avg'].count()
+# df[['tt_avg','link_type']]
 
 df = data_curation(df)
 
@@ -153,7 +156,7 @@ for year in sorted(df['year'].unique()):
 
     Y[year] = tf.concat([traveltime_data, flow_data], axis=3)
 
-    X[year] = get_design_tensor(Z=df_year[['tt_avg'] + features_Z], n_links=n_links, n_days=n_days, n_hours=n_hours)
+    X[year] = get_design_tensor(Z=df_year[features_Z], n_links=n_links, n_days=n_days, n_hours=n_hours)
 
     tt_ff = get_design_tensor(Z=df_year[['tt_ff']], n_links=n_links, n_days=n_days, n_hours=n_hours)
 
@@ -184,9 +187,10 @@ _EPOCHS = 3
 _BATCH_SIZE = 8
 _LR = 5e-2  # Default is 1e-3. With 1e-1, training becomes unstable
 
-# models = dict.fromkeys(['m1', 'm2', 'm3', 'm4'], True)
-models = dict.fromkeys(['m1', 'm2', 'm3', 'm4'], False)
-models['m1'] = True
+# models = dict.fromkeys(['m0', 'm1', 'm2', 'm3', 'm4'], True)
+models = dict.fromkeys(['m0', 'm1', 'm2', 'm3', 'm4'], False)
+models['m0'] = True
+# models['m1'] = True
 # models['m2'] = True
 # models['m3'] = True
 # models['m4'] = True
@@ -211,6 +215,78 @@ column_generator = ColumnGenerator(equilibrator=equilibrator,
 
 train_losses_dfs = {}
 val_losses_dfs = {}
+
+
+if models['m0']:
+
+    print('Equilibrium computation with Autoencoder')
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
+
+    utility_parameters = UtilityParameters(features_Y=['tt'],
+                                           features_Z=features_Z,
+                                           periods=1,
+                                           initial_values={'tt': -1, 'psc_factor': 0,
+                                                           'fixed_effect': np.zeros_like(fresno_network.links)},
+                                           signs={'tt': '-', 'speed_sd': '-', 'median_inc': '+', 'incidents': '-',
+                                                  'bus_stops': '-', 'intersections': '-'},
+                                           trainables={'psc_factor': False, 'fixed_effect': False, 'tt': False},
+                                           )
+
+    bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
+                                   initial_values={'alpha': 0.15, 'beta': 4},
+                                   trainables=dict.fromkeys(['alpha', 'beta'], False),
+                                   )
+
+    od_parameters = ODParameters(key='od',
+                                 periods=1,
+                                 # initial_values=0.6 * tntp_network.q.flatten(),
+                                 initial_values=fresno_network.q.flatten(),
+                                 true_values=fresno_network.q.flatten(),
+                                 historic_values={1: fresno_network.q.flatten()},
+                                 trainable=False)
+
+    model_0a = AETSUELOGIT(
+        key='model_0a',
+        endogenous_traveltimes=True,
+        network=fresno_network,
+        dtype=tf.float64,
+        equilibrator = equilibrator,
+        column_generator = column_generator,
+        utility=utility_parameters,
+        bpr=bpr_parameters,
+        od=od_parameters
+    )
+    
+    train_losses_dfs['model_0a'], val_losses_dfs['model_0a'] = model_0a.train(
+        X_train, Y_train, X_val, Y_val,
+        # generalization_error={'train': False, 'validation': True},
+        optimizer=optimizer,
+        batch_size=_BATCH_SIZE,
+        loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'bpr': 0, 'eq_tt': 1e5},
+        epochs=_EPOCHS)
+
+    model_0b = AESUELOGIT(
+        key='model_0b',
+        endogenous_flows=True,
+        network=fresno_network,
+        dtype=tf.float64,
+        equilibrator=equilibrator,
+        column_generator=column_generator,
+        utility=utility_parameters,
+        bpr=bpr_parameters,
+        od=od_parameters
+    )
+
+    train_losses_dfs['model_0b'], val_losses_dfs['model_0b'] = model_0b.train(
+        X_train, Y_train, X_val, Y_val,
+        # generalization_error={'train': False, 'validation': True},
+        optimizer=optimizer,
+        batch_size=_BATCH_SIZE,
+        loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'bpr': 0, 'eq_flow': 1e5},
+        epochs=_EPOCHS)
+
+
 
 if models['m1']:
     print('\nmodel 1: Benchmark of aesuelogit and isuelogit (utility only)')
@@ -248,7 +324,7 @@ if models['m1']:
         # generalization_error={'train': False, 'validation': True},
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
-        loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 1, 'bpr': 0},
+        loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 1, 'bpr': 0, 'eq_tt': 1e5},
         epochs=_EPOCHS)
 
     plot_predictive_performance(train_losses=train_losses_dfs['model_1'], val_losses=val_losses_dfs['model_1'])
