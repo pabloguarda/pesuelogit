@@ -6,7 +6,8 @@ authors = ["Pablo Guarda <pablo.guarda.r@gmail.com >", "Matt Battifarano <matthe
 
 [tool.poetry.dependencies]
 python = ">=3.8,<3.10"
-tensorflow = "2.7.0"
+tensorflow = "2.9.0"
+protobuf="3.20.1"
 isuelogit = {git = "https://github.com/pabloguarda/isuelogit"}
 
 [tool.poetry.dev-dependencies]
