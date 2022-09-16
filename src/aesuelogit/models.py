@@ -6,13 +6,14 @@ import isuelogit as isl
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from sklearn.metrics import mean_absolute_error
 from tensorflow import keras
 
 from typing import Dict, List, Tuple, Union
 import time
 from .networks import Equilibrator, ColumnGenerator, TransportationNetwork
 from isuelogit.estimation import Parameter, compute_vot
-from .descriptive_statistics import error, mse, rmse, nrmse, btcg_mse
+from .descriptive_statistics import error, mse, rmse, nrmse, btcg_mse, mnrmse,l1norm
 
 
 class NGD(tf.keras.optimizers.SGD):
@@ -158,7 +159,10 @@ class Parameters(isl.estimation.UtilityFunction):
         random_utility_values = []
 
         for feature in keys:
-            initial_value = float(self.true_values[feature])
+            if self._true_values is not None:
+                initial_value = float(self.true_values[feature])
+            else:
+                initial_value = self.initial_values[feature]
 
             if isinstance(range_values, tuple):
                 range_vals = range_values
@@ -269,13 +273,13 @@ class ODParameters(Parameters):
         return np.repeat(self.initial_value[np.newaxis, :], self.periods, axis=0)
 
 
-class AESUELOGIT(tf.keras.Model):
-    """ Auto-encoded stochastic user equilibrium with logit assignment"""
+class GISUELOGIT(tf.keras.Model):
+    """ Gradient based inverse stochastic user equilibrium with logit assignment"""
 
     def __init__(self,
                  network: TransportationNetwork,
                  utility: UtilityParameters,
-                 endogenous_flows = False,
+                 endogenous_flows = True,
                  key: str = None,
                  od: ODParameters = None,
                  bpr: Parameters = None,
@@ -285,7 +289,9 @@ class AESUELOGIT(tf.keras.Model):
                  **kwargs):
 
         self.observed_traveltimes = None
+        self.endogenous_traveltimes = False
         self._flows = None
+
         kwargs['dtype'] = kwargs.get('dtype', tf.float64)
 
         super().__init__(*args, **kwargs)
@@ -298,6 +304,7 @@ class AESUELOGIT(tf.keras.Model):
         self._fixed_effect = None
         self._theta = None
         self._q = None
+        self._parameters = {}
 
         self.endogenous_flows = endogenous_flows
 
@@ -339,13 +346,13 @@ class AESUELOGIT(tf.keras.Model):
             keys = dict.fromkeys(['q', 'theta', 'psc_factor', 'fixed_effect', 'alpha', 'beta'], True)
 
         # Link specific effect (act as an intercept)
-        if self.endogenous_flows:
-            self._flows = tf.Variable(
-                initial_value=tf.math.sqrt(tf.constant(tf.zeros([self.n_hours,self.n_links], dtype=tf.float64))),
-                # initial_value=tf.constant(tf.zeros([self.n_hours,self.n_links]), dtype=tf.float64),
-                trainable= self.endogenous_flows,
-                name='flows',
-                dtype=self.dtype)
+        # if self.endogenous_flows:
+        self._flows = tf.Variable(
+            initial_value=tf.math.sqrt(tf.constant(tf.zeros([self.n_hours,self.n_links], dtype=tf.float64))),
+            # initial_value=tf.constant(tf.zeros([self.n_hours,self.n_links]), dtype=tf.float64),
+            trainable= self.endogenous_flows,
+            name='flows',
+            dtype=self.dtype)
 
         if keys.get('alpha', False):
             self._alpha = tf.Variable(np.log(self.bpr.parameters['alpha'].initial_value),
@@ -353,10 +360,13 @@ class AESUELOGIT(tf.keras.Model):
                                       name=self.bpr.parameters['alpha'].key,
                                       dtype=self.dtype)
         if keys.get('beta', False):
-            self._beta = tf.Variable(np.log(self.bpr.parameters['beta'].initial_value),
-                                     trainable=self.bpr.parameters['beta'].trainable,
-                                     name=self.bpr.parameters['beta'].key,
-                                     dtype=self.dtype)
+            self._beta = tf.Variable(
+                # np.log(self.bpr.parameters['beta'].initial_value),
+                self.bpr.parameters['beta'].initial_value,
+                trainable=self.bpr.parameters['beta'].trainable,
+                name=self.bpr.parameters['beta'].key,
+                dtype=self.dtype)
+
 
         if keys.get('q', False):
             self._q = tf.Variable(initial_value=np.sqrt(self.od.initial_values_array()),
@@ -368,10 +378,14 @@ class AESUELOGIT(tf.keras.Model):
         #  on the value of 'tt'. I should allows for separate estimation
 
         if keys.get('theta', False):
-            self._theta = tf.Variable(initial_value=self.utility.initial_values_array(self.utility.features),
-                                      trainable=self.utility.trainables['tt'],
-                                      name="theta",
-                                      dtype=self.dtype)
+
+            self._theta = []
+
+            for feature in self.utility.features:
+                self._theta.append(tf.Variable(initial_value=self.utility.initial_values[feature],
+                                               trainable=self.utility.trainables[feature],
+                                               name="theta",
+                                               dtype=self.dtype))
         if keys.get('psc_factor', False):
             # Initialize the psc_factor in a value different than zero to generate gradient
             self._psc_factor = tf.Variable(initial_value=self.utility.initial_values['psc_factor'],
@@ -436,7 +450,7 @@ class AESUELOGIT(tf.keras.Model):
 
     @property
     def theta(self):
-        return self.project_theta(self._theta)
+        return self.project_theta(tf.stack(self._theta))
 
     @property
     def D(self):
@@ -481,19 +495,34 @@ class AESUELOGIT(tf.keras.Model):
 
         return tf.einsum("ijkl,jl -> ijk", X, self.theta[:,1:]) + self.fixed_effect + self.theta[:,0]*self.traveltimes()
 
-    def link_traveltimes(self, x):
+
+    def mask_predicted_traveltimes(self,x,k, k_threshold = 1e5):
+
+        mask1 = np.where((k >= k_threshold) | (self.tt_ff == 0), 1, 0)
+        mask2 = np.where((k >= k_threshold), 1, 0)
+        mask3 = np.where((self.tt_ff == 0), 1, 0)
+
+        return (1-mask1)*self.tt_ff * (1 + self.alpha * tf.math.pow(x / k, self.beta)) + (1-mask3)*mask2*self.tt_ff
+
+    def bpr_traveltimes(self, x):
         """
         Link performance function
         """
         # Links capacities
         k = np.array([link.bpr.k for link in self.network.links])
 
-        return self.tt_ff * (1 + self.alpha * tf.math.pow(x / k, self.beta))
+        traveltimes = self.mask_predicted_traveltimes(x, k)
+        # traveltimes = self.tt_ff* (1 + self.alpha * tf.math.pow(x / k, self.beta))
+
+        return traveltimes
+
+
+        # return self.tt_ff * (1 + self.alpha * tf.math.pow(x / k, self.beta))
 
     def traveltimes(self):
         """ Return tensor variable associated to endogenous travel times (assumed dependent on link flows)"""
 
-        return self.link_traveltimes(x=self.flows())
+        return self.bpr_traveltimes(x=self.flows())
 
     def path_utilities(self, V):
         return self.path_size_correction(tf.einsum("ijk,kl -> ijl", V, self.D))
@@ -573,7 +602,9 @@ class AESUELOGIT(tf.keras.Model):
     @property
     def beta(self):
         # return tf.clip_by_value(self._beta, 0 + self._epsilon, 5)
-        return tf.exp(self._beta)
+        # return tf.clip_by_value(tf.exp(self._beta),1,5)
+        return tf.clip_by_value(self._beta, 1, 5)
+        # return self._beta
 
     @property
     def tt_ff(self):
@@ -683,7 +714,7 @@ class AESUELOGIT(tf.keras.Model):
         It assumes that the historic_od is only meaningful for the first hour
         """
 
-        historic_od = tf.expand_dims(tf.constant(self.network.q.flatten()), axis=0)
+        historic_od = tf.expand_dims(tf.constant(self.od.historic_values[1].q.flatten()), axis=0)
         if tf.rank(pred_q) > 1:
             extra_od_cols = tf.cast(tf.constant(float('nan'), shape=(pred_q.shape[0] - 1, tf.size(historic_od))),
                                     tf.float64)
@@ -693,12 +724,19 @@ class AESUELOGIT(tf.keras.Model):
 
         return historic_od
 
+    def mask_observed_traveltimes(self,tt,k,k_threshold = 1e5):
+
+        mask1 = np.where((k >= k_threshold) | (self.tt_ff == 0), 1, 0)
+        mask2 = np.where((k >= k_threshold), 1, 0)
+        mask3 = np.where((self.tt_ff == 0), 1, 0)
+
+        return (1-mask1)*tt + (1-mask3)*mask2*self.tt_ff
+
     def loss_function(self,
                       X,
                       Y,
                       lambdas: Dict[str, float],
-                      # loss_metric = btcg_mse,
-                      loss_metric=mse,
+                      loss_metric = None
                       ):
         """
         Return a dictionary with keys defined as the different terms of the loss function
@@ -707,7 +745,11 @@ class AESUELOGIT(tf.keras.Model):
 
         """
 
-        lambdas_vals = {'tt': 1.0, 'od': 0.0, 'theta': 0.0, 'flow': 0.0, 'bpr': 0.0, 'eq_flow': 0.0, 'eq_tt': 0.0}
+        if loss_metric is None:
+            # loss_metric = mnrmse
+            loss_metric = mse
+
+        lambdas_vals = {'tt': 0.0, 'od': 0.0, 'theta': 0.0, 'flow': 0.0, 'eq_flow': 0.0, 'eq_tt': 0.0}
 
         assert set(lambdas.keys()).issubset(lambdas_vals.keys()), 'Invalid key in loss_weights attribute'
 
@@ -718,15 +760,28 @@ class AESUELOGIT(tf.keras.Model):
 
         if Y.shape[-1] > 0:
             self.observed_traveltimes, self.observed_flows = tf.unstack(Y,axis = -1)
-            predicted_flow = self.compute_link_flows(X)
-            predicted_traveltimes = self.link_traveltimes(predicted_flow)
 
-            loss = {'od': loss_metric(actual=self.historic_od(pred_q=self.q), predicted=self.q),
-                    'flow': loss_metric(actual=tf.squeeze(self.observed_flows), predicted=predicted_flow),
-                    'tt': loss_metric(actual=self.observed_traveltimes, predicted=predicted_traveltimes),
-                    'theta': tf.reduce_mean(tf.norm(self.theta, 1)),
-                    'bpr': loss_metric(actual=tf.squeeze(self.observed_traveltimes), predicted=predicted_traveltimes),
-                    'total': tf.constant(0, tf.float64)}
+            k = np.array([link.bpr.k for link in self.network.links])
+            self.observed_traveltimes = self.mask_observed_traveltimes(tt = self.observed_traveltimes, k = k)
+
+            predicted_flow = self.compute_link_flows(X)
+            predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
+
+            # predicted_flow = self.flows()
+            # predicted_traveltimes = self.traveltimes()
+
+            # np.nanmean(self.observed_traveltimes)
+            # np.nanmean(predicted_traveltimes)
+
+            loss = {
+                'od': loss_metric(actual=tf.constant(self.od.historic_values[1].flatten()),
+                                  predicted=self.q),
+                'flow': loss_metric(actual=self.observed_flows, predicted=predicted_flow),
+                'tt': loss_metric(actual=self.observed_traveltimes, predicted=predicted_traveltimes),
+                # 'theta': tf.reduce_mean(tf.norm(self.theta, 1)),
+                # #todo: review bpr or tt loss, should they be equivalent?
+                # 'bpr': loss_metric(actual=self.observed_traveltimes, predicted=predicted_traveltimes),
+                'total': tf.constant(0, tf.float64)}
 
         # tf.squeeze(self.observed_flows)[0]-predicted_flow[0]
 
@@ -734,8 +789,22 @@ class AESUELOGIT(tf.keras.Model):
         if self.endogenous_flows:
             loss['eq_flow'] = loss_metric(actual=self.flows(), predicted=predicted_flow)
 
-        # if self.endogenous_traveltimes:
-        loss['eq_tt'] = loss_metric(actual=self.traveltimes(), predicted=tf.squeeze(predicted_traveltimes))
+            # loss['eq_flow'] = tf.reduce_mean(tf.divide(predicted_flow,self.flows())) #-1
+            # np.nanmean(np.abs(1 * (tf.divide(predicted_flow, self.flows()))))
+            # loss['eq_flow'] = l1norm(actual=self.flows(), predicted=predicted_flow)
+            # print(np.mean(np.abs(self.flows()-predicted_flow)))
+            # np.nanmean(np.abs(1 * (tf.divide(self.flows(),predicted_flow) - 1)))
+            # np.nanmean(np.abs(1 * (tf.divide(predicted_flow,self.flows()) - 1)))
+            # np.mean(np.abs(100*(self.flows()/predicted_flow-1)))
+            # np.mean(self.observed_flows)
+        else:
+            loss['eq_flow'] = loss_metric(actual=self.bpr_flows(self.traveltimes()), predicted=predicted_flow)
+
+        if self.endogenous_traveltimes:
+            loss['eq_tt'] = loss_metric(actual=self.traveltimes(), predicted=predicted_traveltimes)
+            print(np.mean(np.abs(self.traveltimes() - predicted_traveltimes)))
+        else:
+            loss['eq_tt'] = loss_metric(actual=self.bpr_traveltimes(self.flows()), predicted=predicted_traveltimes)
 
         # self.traveltimes()
         # tf.squeeze(predicted_traveltimes)[0]
@@ -759,30 +828,35 @@ class AESUELOGIT(tf.keras.Model):
 
         return loss
 
-    def normalized_losses(self, losses) -> pd.DataFrame:
+    def normalized_losses(self, losses: pd.DataFrame) -> pd.DataFrame:
+
+        columns = [col for col in losses.columns if col != 'epoch']
+        losses[columns] = losses[columns]/losses[losses['epoch'] == losses['epoch'].min()][columns]
+
+        return losses
 
         # if losses[0]['total'] == 0:
         #     return losses
 
-        losses_df = []
-        for epoch, loss in enumerate(losses):
-            losses_df.append({'epoch': epoch})
-            for key, val in loss.items():
-                losses_df[-1][key] = [val.numpy()]
-                normalizer = losses[0][key].numpy()
-                if normalizer == 0:
-                    losses_df[-1][key] = [100]
-                else:
-                    losses_df[-1][key] = losses_df[-1][key] / normalizer * 100
-
-        return pd.concat([pd.DataFrame(i) for i in losses_df], axis=0, ignore_index=True)
+        # losses_df = []
+        # for epoch, loss in enumerate(losses):
+        #     losses_df.append({'epoch': epoch})
+        #     for key, val in loss.items():
+        #         losses_df[-1][key] = [val.numpy()]
+        #         normalizer = losses[0][key].numpy()
+        #         if normalizer == 0:
+        #             losses_df[-1][key] = [100]
+        #         else:
+        #             losses_df[-1][key] = losses_df[-1][key] / normalizer * 100
+        #
+        # return pd.concat([pd.DataFrame(i) for i in losses_df], axis=0, ignore_index=True)
 
     def get_parameters_estimates(self) -> pd.DataFrame:
 
         # TODO: extend for multiperiod theta and multilinks alpha, beta
         estimates = {}
         estimates.update(dict(zip(self.utility.features, self.theta.numpy().flatten())))
-        estimates.update(dict(zip(['alpha', 'beta'], [float(self.alpha.numpy()), float(self.beta.numpy())])))
+        estimates.update(dict(zip(['alpha', 'beta'], [np.mean(self.alpha.numpy()), np.mean(self.beta.numpy())])))
         estimates['psc_factor'] = float(self.psc_factor.numpy())
 
         return pd.DataFrame(estimates, index=[0])
@@ -816,6 +890,8 @@ class AESUELOGIT(tf.keras.Model):
               Y_val: tf.constant,
               optimizer: tf.keras.optimizers,
               loss_weights: Dict[str, float],
+              threshold_relative_gap: float = 1e-4,
+              loss_metric=None,
               generalization_error: Dict[str, bool] = None,
               epochs=1,
               batch_size=None) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -835,10 +911,17 @@ class AESUELOGIT(tf.keras.Model):
 
         self.create_tensor_variables()
 
-        if self.endogenous_flows:
-            # Smart initialization is performed running a single pass of traffic assignment under initial theta and q
-            self._flows.assign(tf.math.sqrt(tf.reduce_mean(self.call(X_train),axis = 0)))
-            # self._flows.assign(tf.squeeze(tf.reduce_mean(self.call(tf.unstack(Y_train,axis = -1)[1]),axis=-1)))
+        # Initialization of endogenous travel times and flows
+        predicted_flow = self.compute_link_flows(X_train)
+        predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
+
+        # if self.endogenous_flows:
+        # Smart initialization is performed running a single pass of traffic assignment under initial theta and q
+        self._flows.assign(tf.math.sqrt(tf.reduce_mean(predicted_flow,axis = 0)))
+        # self._flows.assign(tf.squeeze(tf.reduce_mean(self.call(tf.unstack(Y_train,axis = -1)[1]),axis=-1)))
+
+        if self.endogenous_traveltimes:
+            self._traveltimes.assign(tf.reduce_mean(predicted_traveltimes, axis = 0))
 
         epoch = 0
         t0 = time.time()
@@ -851,22 +934,49 @@ class AESUELOGIT(tf.keras.Model):
         # val_dataset = val_dataset.batch(batch_size)
 
         # Initial Losses
-        train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights)['loss_total']
+        # train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights)['loss_total']
         # val_loss = self.loss_function(X=X_val, Y=Y_val, loss_weights=loss_weights)['total']
+
+        loss_weights_eq = {k:0 for k, v in loss_weights.items()}
+        loss_weights_eq['eq_flow'] = 1
+        lr = optimizer.lr
+        lr_eq = 5e-1
 
         train_losses, val_losses = [], []
 
         estimates = []
 
-        while epoch <= epochs:
+        relative_gap = 1e10
+
+        sue_objectives = []
+
+        while epoch <= epochs and abs(relative_gap) > threshold_relative_gap:
 
             estimates.append(self.get_parameters_estimates())
+
+            path_flows = self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X_train))))
+            link_flow = self.link_flows(path_flows)
+            relative_x = float(np.nanmean(np.abs(1 * (tf.divide(link_flow,self.flows()) - 1))))
+
+            sue_objective = sue_objective_function_fisk(f = path_flows[0,0,:].numpy().flatten(),
+                                                        X = X_train[0, 0, :, :],
+                                                        theta = dict(zip(self.utility.features,self.theta.numpy())),
+                                                        k_Z = self.utility.features_Z,
+                                                        k_Y= self.utility.features_Y,
+                                                        network = self.network)
+
+            sue_objectives.append(sue_objective)
+
+            if len(sue_objectives)>=2:
+                relative_gap = (sue_objectives[-1] / sue_objectives[-2] - 1)
+                # print(f"{relative_gap:0.2g}")
+                # print(sue_objective)
 
             if epoch % 1 == 0:
                 print(f"\nEpoch: {epoch}, n_train: {X_train.shape[0]}, n_test: {X_val.shape[0]}")
                 # print(f"{i}: loss={loss.numpy():0.4g}, theta = {model.theta.numpy()}")
-                train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights)
-                val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights)
+                train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights, loss_metric=mse)
+                val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse)
 
                 if generalization_error.get('train', False):
                     train_loss['generalization_error'] = self.generalization_error(X=X_train, Y=Y_train)
@@ -876,26 +986,29 @@ class AESUELOGIT(tf.keras.Model):
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)
 
-                print(f"\n{epoch}: train_loss={float(train_loss['loss_total'].numpy()):0.1g}, "
+                print(f"\n{epoch}: train_loss={float(train_loss['loss_total'].numpy()):0.2g}, "
                     f"val_loss={float(val_loss['loss_total'].numpy()):0.2g}, "
                     f"train_loss tt={float(train_loss['loss_tt'].numpy()):0.2g}, "
                     f"val_loss tt={float(val_loss['loss_tt'].numpy()):0.2g}, "
                     f"train_loss flow={float(train_loss['loss_flow'].numpy()):0.2g}, "
                     f"val_loss flow={float(val_loss['loss_flow'].numpy()):0.2g}, "
-                    f"train_loss bpr={float(train_loss['loss_bpr'].numpy()):0.2g}, "
-                    f"val_loss bpr={float(val_loss['loss_bpr'].numpy()):0.2g}, "
+                    # f"train_loss bpr={float(train_loss['loss_bpr'].numpy()):0.2g}, "
+                    # f"val_loss bpr={float(val_loss['loss_bpr'].numpy()):0.2g}, "
                     f"theta = {self.theta.numpy()}, "
                     f"vot = {np.array(compute_vot(self.get_parameters_estimates().to_dict(orient='records')[0])):0.2f}, "
                     f"psc_factor = {self.psc_factor.numpy()}, "
                     f"avg abs theta fixed effect = {np.mean(np.abs(self.fixed_effect)):0.2g}, "
-                    f"avg alpha = {np.mean(self.alpha.numpy()):0.2g}, avg beta = {np.mean(self.beta.numpy()):0.2g}, "
-                    f"avg abs diff demand ={np.nanmean(np.abs(self.q - self.historic_od(self.q))):0.2g}, ",end = '')
+                    f"avg alpha={np.mean(self.alpha.numpy()):0.2g}, avg beta={np.mean(self.beta.numpy()):0.2g}, "
+                    # f"avg abs diff demand ={np.nanmean(np.abs(self.q - self.historic_od(self.q))):0.2g}, ",end = '')
+                    f"loss demand={float(train_loss['loss_od'].numpy()):0.2g}, "
+                      f"relative x={relative_x:0.2g}, "
+                      f"relative gap={relative_gap:0.2g}, ", end='')
 
                 if train_loss.get('loss_eq_tt', False):
-                    print(f"train tt equilibrium loss ={float(train_loss['loss_eq_tt'].numpy()):0.2g}, ", end = '')
+                    print(f"train tt equilibrium loss={float(train_loss['loss_eq_tt'].numpy()):0.2g}, ", end = '')
 
                 if train_loss.get('loss_eq_flow', False):
-                    print(f"train flow equilibrium loss ={float(train_loss['loss_eq_flow'].numpy()):0.2g}, ", end = '')
+                    print(f"train flow equilibrium loss={float(train_loss['loss_eq_flow'].numpy()):0.2g}, ", end = '')
 
                 if generalization_error.get('train', False):
                     print(f"train generalization error ={train_loss['generalization_error'].numpy():0.2g}, ", end = '')
@@ -911,10 +1024,24 @@ class AESUELOGIT(tf.keras.Model):
 
                 # Gradient based learning
 
+                current_loss_weights = loss_weights
+
+                # if relative_gap >= 1e-1:
+                #     current_loss_weights = loss_weights_eq
+                #     # self._theta.trainable = False
+                #     optimizer.lr = lr_eq
+                # else:
+                #     current_loss_weights = loss_weights
+                #     self._theta.trainable = True
+                #     optimizer.lr = lr
+
                 for step, (X_batch_train, Y_batch_train) in enumerate(train_dataset):
+
                     with tf.GradientTape() as tape:
                         train_loss = \
-                            self.loss_function(X=X_batch_train, Y=Y_batch_train, lambdas=loss_weights)['loss_total']
+                            self.loss_function(X=X_batch_train, Y=Y_batch_train, lambdas=current_loss_weights,
+                                               loss_metric=loss_metric)['loss_total']
+
 
                     grads = tape.gradient(train_loss, self.trainable_variables)
 
@@ -937,11 +1064,29 @@ class AESUELOGIT(tf.keras.Model):
 
             # TODO: Path set selection (confirm if necessary)
 
-        train_losses_df = self.normalized_losses(train_losses)
-        val_losses_df = self.normalized_losses(val_losses)
+        train_losses_df = pd.concat([pd.DataFrame([losses_epoch], index=[0]).astype(float).assign(epoch = epoch) for epoch, losses_epoch in enumerate(train_losses)])
 
-        train_results_df = pd.concat([train_losses_df, pd.concat(estimates, axis=0).reset_index(drop=True)], axis=1)
-        val_results_df = val_losses_df
+        val_losses_df = pd.concat([pd.DataFrame([losses_epoch], index=[0]).astype(float).assign(epoch = epoch) for epoch, losses_epoch in enumerate(val_losses)])
+
+        # Replace equilibirum loss in first epoch with the second epoch, to avoid zero loss when initializing utility parameters to zero
+        train_losses_df.loc[train_losses_df['epoch'] == 0,'loss_eq_flow'] \
+            = train_losses_df.loc[train_losses_df['epoch'] == 1,'loss_eq_flow'].copy()
+        val_losses_df.loc[val_losses_df['epoch'] == 0, 'loss_eq_flow'] \
+            = val_losses_df.loc[val_losses_df['epoch'] == 1, 'loss_eq_flow'].copy()
+
+        train_losses_df.loc[train_losses_df['epoch'] == 0,'loss_od'] \
+            = train_losses_df.loc[train_losses_df['epoch'] == 1,'loss_od'].copy()
+        val_losses_df.loc[val_losses_df['epoch'] == 0, 'loss_od'] \
+            = val_losses_df.loc[val_losses_df['epoch'] == 1, 'loss_od'].copy()
+
+        # Normalized losses
+        # losses_columns = [column for column in train_losses_df.keys() if column not in ["loss_eq_flow"]]
+        losses_columns = [column for column in train_losses_df.keys()]
+        train_losses_df = self.normalized_losses(train_losses_df[losses_columns])#.assign(loss_eq_flow = train_losses_df['loss_eq_flow'])
+        val_losses_df = self.normalized_losses(val_losses_df[losses_columns])#.assign(loss_eq_flow = val_losses_df['loss_eq_flow'])
+
+        train_results_df = pd.concat([train_losses_df.reset_index(drop=True), pd.concat(estimates, axis=0).reset_index(drop=True)], axis=1)
+        val_results_df = val_losses_df.reset_index(drop=True)
 
         # train_losses_df['generalization_error'] = train_generalization_errors
         # val_losses_df['generalization_error'] = val_generalization_errors
@@ -962,7 +1107,73 @@ class AESUELOGIT(tf.keras.Model):
 
         return self.compute_link_flows(X)
 
-class AETSUELOGIT(AESUELOGIT):
+def almost_zero(array: np.array, tol = 1e-5):
+    array[np.abs(array) < tol] = 0
+
+    return array
+
+def entropy_path_flows_sue(f):
+
+    ''' It corrects for numerical issues by masking terms before the entropy computation'''
+
+    epsilon = 1e-12
+
+    return np.sum(almost_zero(f, tol=epsilon) * (np.log(f + epsilon)))
+
+def sue_objective_function_fisk(f,
+                                X,
+                                network,
+                                theta: dict,
+                                k_Z: [],
+                                k_Y: [] = ['tt']
+                                ):
+
+    # links_dict = network.links_dict
+    # x_vector = np.array(list(x_dict.values()))
+    x_vector = network.D.dot(f)
+
+    if not np.all(f >= 0):
+        print('some elements in the path flow vector are negative')
+
+    # Objective function
+
+    # Component for endogeonous attributes dependent on link flow
+    bpr_integrals = [float(link.bpr.bpr_integral_x(x=x)) for link, x in
+                     zip(network.links, x_vector.flatten().tolist())]
+    # bpr_integrals = [float(link.bpr.bpr_integral_x(x=x_dict[i])) for i, link in links_dict.items()]
+
+    tt_utility_integral = float(theta[k_Y[0]]) * np.sum(np.sum(bpr_integrals))
+
+    # Component for exogenous attributes (independent on link flow)
+    Z_utility_integral = 0
+
+    # if k_Z:
+    #     for attr in k_Z:
+            # Zx_vector = np.array(list(network.Z_data[attr]))[:, np.newaxis]
+            # Z_utility_integral += float(theta[attr]) * Zx_vector.T.dot(x_vector)
+
+    Z_utility_integral = X.numpy().T.dot(x_vector).dot(np.array([theta[k_z] for k_z in k_Z]).T)
+
+    # Objective function in multiattribute problem
+    utility_integral = tt_utility_integral + float(Z_utility_integral)
+    # utility_integral = float(Z_utility_integral)
+
+    # entropy = cp.sum(cp.entr(cp.hstack(list(cp_f.values()))))
+
+    entropy_function = entropy_path_flows_sue(f)
+
+    # if not np.all(f > 0):
+    #     print('some elements in the path flow vector are 0')
+    #     f = no_zeros(f)
+    # entropy_function = np.sum(np.log(f)*f)
+
+    # objective_function = utility_integral #- entropy_function
+    objective_function = utility_integral - entropy_function
+
+    return float(objective_function)
+
+
+class AETSUELOGIT(GISUELOGIT):
     """ Auto-encoded travel time based stochastic user equilibrium with logit assignment"""
 
     def __init__(self,
@@ -972,9 +1183,9 @@ class AETSUELOGIT(AESUELOGIT):
 
         kwargs.update({'endogenous_flows': False})
 
-        self.endogenous_traveltimes = endogenous_traveltimes
-
         super().__init__(*args, **kwargs)
+
+        self.endogenous_traveltimes = endogenous_traveltimes
 
     def create_tensor_variables(self, keys: Dict[str, bool] = None):
 
@@ -982,28 +1193,35 @@ class AETSUELOGIT(AESUELOGIT):
 
             self._traveltimes = tf.Variable(
                 # initial_value=tf.math.sqrt(tf.constant(tf.zeros(self.n_links, dtype=tf.float64))),
-                initial_value=tf.math.sqrt(tf.tile(tf.expand_dims(self.tt_ff,0),tf.constant([self.n_hours,1]))),
+                initial_value=tf.tile(tf.expand_dims(self.tt_ff, 0), tf.constant([self.n_hours, 1])),
+                # initial_value=tf.math.sqrt(tf.tile(tf.expand_dims(self.tt_ff,0),tf.constant([self.n_hours,1]))),
+                # initial_value=tf.math.sqrt(tf.tile(tf.constant(self.tt_ff[tf.newaxis,tf.newaxis,:]),
+                #                                    tf.constant([self.n_days, self.n_hours,1]))),
                 trainable= self.endogenous_traveltimes,
                 name='traveltimes',
                 dtype=self.dtype)
 
-        AESUELOGIT.create_tensor_variables(self, keys=keys)
+        GISUELOGIT.create_tensor_variables(self, keys=keys)
 
-    def traveltimes(self):
+    def traveltimes(self, link_flow = None):
         """
-        Return exogenous or endogenous travel times via tensorflow constant or variables, respectively
+        return tensorflow variable of dimension (n_hours, n_links) and initialized using average over hours-links
         """
+        return tf.clip_by_value(self._traveltimes, clip_value_min = tf.constant(self._tt_ff), clip_value_max = tf.float64.max)
+        # return tf.math.pow(self._traveltimes,2)
 
-        if self.endogenous_traveltimes:
-            # return tensorflow variable of dimension (n_hours, n_links) and initialized using average over hours-links
-            return tf.math.pow(self._traveltimes,2)
+        # return tf.math.pow(self._traveltimes,2)
 
-        else:
-            #TODO: tensorflow constant from Y tensor
-           
-            pass
+    def bpr_flows(self, t):
+        """
+        Inverse of link performance function. Subject to large approximation errors when beta=4
+        """
+        # Links capacities
+        k = np.array([link.bpr.k for link in self.network.links])
 
+        return tf.math.sqrt((t/self.tt_ff-1)/self.alpha, self.beta)*k
 
+        # return self.tt_ff * (1 + self.alpha * tf.math.pow(x / k, self.beta))
 
     def call(self, X):
         """
@@ -1013,10 +1231,10 @@ class AETSUELOGIT(AESUELOGIT):
         return matrix of dimension (n_days, n_links)
         """
 
-        return self.link_traveltimes(self.compute_link_flows(X))
+        return self.bpr_traveltimes(self.compute_link_flows(X))
 
 
-class ODLUE(AESUELOGIT):
+class ODLUE(GISUELOGIT):
 
     # ODLUE is an extension of the logit utility estimation (LUE) problem solved in the isuelogit package.  It is
     # fed with link features of multiple time days and it allows for the estimation of the OD matrix and of the
@@ -1037,7 +1255,7 @@ class ODLUE(AESUELOGIT):
             keys = dict.fromkeys(['q', 'theta', 'psc_factor', 'fixed_effect'], True)
             # keys = dict.fromkeys(['alpha', 'beta'], False)
 
-        AESUELOGIT.create_tensor_variables(self, keys=keys)
+        GISUELOGIT.create_tensor_variables(self, keys=keys)
 
     def call(self, X):
         """
