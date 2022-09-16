@@ -6,14 +6,20 @@ import numpy as np
 from typing import Dict, List, Tuple
 from .networks import TransportationNetwork, Equilibrator
 
-def simulate_features(n_days, **kwargs):
+def simulate_features(n_days, daytoday_variation = False, **kwargs):
+
     linkdata_generator = isl.factory.LinkDataGenerator()
 
     df_list = []
 
     for i in range(1, n_days + 1):
-        df_day = linkdata_generator.simulate_features(**kwargs)
-        df_day.insert(0, 'period', i)
+
+        if i == 1 or daytoday_variation:
+            df_day = linkdata_generator.simulate_features(**kwargs)
+            df_day.insert(0, 'period', i)
+        else:
+            df_day = df_day.assign(period = i)
+
         df_list.append(df_day)
 
     df = pd.concat(df_list)
@@ -42,6 +48,9 @@ def simulate_suelogit_data(days: List,
                            features_data: pd.DataFrame,
                            network: TransportationNetwork,
                            equilibrator: Equilibrator,
+                           sd_x: float = 0,
+                           sd_t: float = 0,
+                           daytoday_variation = False,
                            **kwargs):
     linkdata_generator = isl.factory.LinkDataGenerator()
 
@@ -55,18 +64,25 @@ def simulate_suelogit_data(days: List,
 
         network.load_features_data(linkdata=df_period)
 
-        with block_output(show_stdout=False, show_stderr=False):
-            counts, _ = linkdata_generator.simulate_counts(
-                network=network,
-                equilibrator=equilibrator,
-                noise_params={'mu_x': 0, 'sd_x': 0},
-                coverage=1)
+        if i == 0 or daytoday_variation:
 
-        network.load_traffic_counts(counts=counts)
+            with block_output(show_stdout=False, show_stderr=False):
+                counts, _ = linkdata_generator.simulate_counts(
+                    network=network,
+                    equilibrator=equilibrator, #{'mu_x': 0, 'sd_x': 0},
+                    coverage=1)
+
+        counts_day = linkdata_generator.add_error_counts(
+            original_counts=np.array(list(counts.values()))[:, np.newaxis], sd_x=sd_x)
+
+        network.load_traffic_counts(counts=dict(zip(counts.keys(),counts_day.flatten())))
+
+        df_period['counts'] = network.observed_counts_vector
 
         df_period['traveltime'] = [link.true_traveltime for link in network.links]
 
-        df_period['counts'] = network.observed_counts_vector
+        df_period['traveltime'] = linkdata_generator.add_error_counts(
+            original_counts=np.array(df_period['traveltime'].values), sd_x=sd_t)
 
         df_list.append(df_period)
 
