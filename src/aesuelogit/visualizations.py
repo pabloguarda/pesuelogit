@@ -1,10 +1,12 @@
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
 import seaborn as sns
 import pandas as pd
 import numpy as np
 from isuelogit.estimation import compute_vot
 from typing import Union, Dict, List, Tuple
 from isuelogit.mytypes import Matrix
+
 
 
 def plot_convergence_estimates(estimates: pd.DataFrame,
@@ -30,37 +32,96 @@ def plot_convergence_estimates(estimates: pd.DataFrame,
               xmin=estimates['epoch'].min(), xmax=estimates['epoch'].max(), colors=colors, linestyle='--')
 
 
-def plot_predictive_performance(train_losses: pd.DataFrame,
+def plot_predictive_performance_twoaxes(train_losses: pd.DataFrame,
                                 val_losses: pd.DataFrame) -> None:
-    fig = plt.figure()
+    fig, ax1 = plt.subplots()
 
-    plt.plot(train_losses['epoch'], train_losses['loss_tt'], label="Train loss (travel time)", color='red',
+    ax1.plot(train_losses['epoch'], train_losses['loss_tt'], label="Train loss (travel time)", color='red',
              linestyle='-')
-    plt.plot(val_losses['epoch'], val_losses['loss_tt'], label="Validation loss (travel time)", color='red',
+    ax1.plot(val_losses['epoch'], val_losses['loss_tt'], label="Test loss (travel time)", color='red',
              linestyle='--')
-    plt.plot(train_losses['epoch'], train_losses['loss_flow'], label="Train loss (flow)", color='blue', linestyle='-')
-    plt.plot(val_losses['epoch'], val_losses['loss_flow'], label="Validation loss (flow)", color='blue',
+    ax1.plot(train_losses['epoch'], train_losses['loss_flow'], label="Train loss (flow)", color='blue', linestyle='-')
+    ax1.plot(val_losses['epoch'], val_losses['loss_flow'], label="Test loss (flow)", color='blue',
              linestyle='--')
-    plt.plot(train_losses['epoch'], train_losses['loss_bpr'], label="Train loss (bpr)", color='gray', linestyle='-')
-    plt.plot(val_losses['epoch'], val_losses['loss_bpr'], label="Validation loss (bpr)", color='gray',
-             linestyle='--')
+    # plt.plot(train_losses['epoch'], train_losses['loss_bpr'], label="Train loss (bpr)", color='gray', linestyle='-')
+    # plt.plot(val_losses['epoch'], val_losses['loss_bpr'], label="Test loss (bpr)", color='gray',
+    #          linestyle='--')
+
+    ax2 = ax1.twinx()
+    ax2.plot(train_losses['epoch'], train_losses['loss_eq_flow'], label="Train loss (eq flow)", color='gray', linestyle='-')
+    ax2.plot(val_losses['epoch'], val_losses['loss_eq_flow'], label="Test loss (eq flow)", color='gray', linestyle='--')
 
     if 'generalization_error' in train_losses.keys():
         plt.plot(train_losses['epoch'], train_losses['generalization_error'], label="Train loss (generalization)",
                  color='black', linestyle='-')
     if 'generalization_error' in val_losses.keys():
-        plt.plot(val_losses['epoch'], val_losses['generalization_error'], label="Validation loss (generalization)",
+        plt.plot(val_losses['epoch'], val_losses['generalization_error'], label="Test loss (generalization)",
                  color='black', linestyle='--')
 
+    # https://stackoverflow.com/questions/5484922/secondary-axis-with-twinx-how-to-add-to-legend
     plt.xticks(np.arange(train_losses['epoch'].min(), train_losses['epoch'].max() + 1, 5))
     plt.xlim(xmin=train_losses['epoch'].min(), xmax=train_losses['epoch'].max())
     # plt.ylim(ymin=0, ymax=100)
     plt.ylim(ymin=0)
     plt.xlabel('epoch')
-    plt.ylabel('change in loss (%)')
-    plt.legend()
+
+    ax1.set_ylabel('change in loss (%)')
+    ax2.set_ylabel('change in equilibrium metric (%)')
+
+    # ax1.legend(loc = 0)
+    # ax2.legend(loc = 1)
+    fig.legend(loc = "upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
 
     fig.show()
+
+def plot_predictive_performance(train_losses: pd.DataFrame,
+                                val_losses: pd.DataFrame,
+                                xticks_spacing: int = 5,
+                                **kwargs) -> None:
+
+    fig, ax = plt.subplots()
+
+    ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
+
+    ax.plot(train_losses['epoch'], train_losses['loss_tt'], label="Train loss (travel time)", color='red', linestyle='-')
+    ax.plot(val_losses['epoch'], val_losses['loss_tt'], label="Test loss (travel time)", color='red',linestyle='--')
+    ax.plot(train_losses['epoch'], train_losses['loss_flow'], label="Train loss (flow)", color='blue', linestyle='-')
+    ax.plot(val_losses['epoch'], val_losses['loss_flow'], label="Test loss (flow)", color='blue', linestyle='--')
+    # ax.plot(train_losses['epoch'], train_losses['loss_od'], label="Train loss (od)", color='green', linestyle='-')
+    # ax.plot(val_losses['epoch'], val_losses['loss_od'], label="Test loss (od)", color='green', linestyle='--')
+
+    # plt.plot(train_losses['epoch'], train_losses['loss_bpr'], label="Train loss (bpr)", color='gray', linestyle='-')
+    # plt.plot(val_losses['epoch'], val_losses['loss_bpr'], label="Test loss (bpr)", color='gray',
+    #          linestyle='--')
+
+    ax.plot(train_losses['epoch'], train_losses['loss_eq_flow'], label="Train loss (eq flow)", color='gray', linestyle='-')
+    ax.plot(val_losses['epoch'], val_losses['loss_eq_flow'], label="Test loss (eq flow)", color='gray', linestyle='--')
+
+    if 'generalization_error' in train_losses.keys():
+        plt.plot(train_losses['epoch'], train_losses['generalization_error'], label="Train loss (generalization)",
+                 color='black', linestyle='-')
+    if 'generalization_error' in val_losses.keys():
+        plt.plot(val_losses['epoch'], val_losses['generalization_error'], label="Test loss (generalization)",
+                 color='black', linestyle='--')
+
+    # https://stackoverflow.com/questions/5484922/secondary-axis-with-twinx-how-to-add-to-legend
+    plt.xticks(np.arange(train_losses['epoch'].min(), train_losses['epoch'].max() + 1, xticks_spacing))
+    plt.xlim(xmin=train_losses['epoch'].min(), xmax=train_losses['epoch'].max()),
+
+    # plt.ylim(ymin=0, ymax=100)
+    plt.ylim(ymin=0)
+    plt.xlabel('epoch')
+
+    # ax.set_ylabel('loss')
+    ax.set_ylabel('relative loss (%)')
+    # ax.set_ylabel('change in equilibrium metric (%)')
+
+    # ax1.legend(loc = 0)
+    # ax2.legend(loc = 1)
+    fig.legend(loc = "upper right", bbox_to_anchor=(1,1), bbox_transform=ax.transAxes)
+
+    fig.show()
+
 
 
 def plot_levels_experiment(results: pd.DataFrame,
@@ -95,7 +156,7 @@ def plot_levels_experiment(results: pd.DataFrame,
             # ax[(0, 1)].set(ylim=(-5e-1,5e-1))
             ax[(0, 1)].set(ylim=range_initial_values)
 
-    # 3) NRMSE Validation
+    # 3) NRMSE Test
 
     # sns.barplot(x="level", y="nrmse_train", data=results, color="white",
     #             errcolor="black", edgecolor="black", linewidth=1.5, errwidth=1.5, ax=ax[(1, 0)])
@@ -104,7 +165,7 @@ def plot_levels_experiment(results: pd.DataFrame,
     ax[(1, 0)].set_yticks(np.arange(0, 1 + 0.1, 0.2))
     ax[(1, 0)].set(ylim=(0, 1))
     # ax[(1, 0)].set_ylabel("nrmse training set")
-    ax[(1, 0)].set_ylabel("nrmse in validation set")
+    ax[(1, 0)].set_ylabel("nrmse in test set")
 
     # 4) Generalization error
 
@@ -113,7 +174,7 @@ def plot_levels_experiment(results: pd.DataFrame,
     ax[(1, 1)].set_yticks(np.arange(0, 1 + 0.1, 0.2))
     ax[(1, 1)].set(ylim=(0, 1))
     ax[(1, 1)].set_ylabel("generalization error")
-    # ax[(1, 1)].set_ylabel("generalization error in validation set")
+    # ax[(1, 1)].set_ylabel("generalization error in test set")
 
     # Change color style to white and black in box plots
     for axi in [ax[(0, 0)],ax[(0, 1)]]:
