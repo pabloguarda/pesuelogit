@@ -22,11 +22,12 @@ print('main dir:', main_dir)
 isl.config.dirs['read_network_data'] = "input/network-data/fresno/"
 
 # Internal modules
-from src.aesuelogit.models import UtilityParameters, BPRParameters, ODParameters, AESUELOGIT, AETSUELOGIT, NGD
+from src.aesuelogit.models import UtilityParameters, BPRParameters, ODParameters, GISUELOGIT, NGD
 from src.aesuelogit.visualizations import plot_predictive_performance
 from src.aesuelogit.networks import load_k_shortest_paths, read_paths, build_fresno_network, \
     Equilibrator, sparsify_OD, ColumnGenerator, read_OD
 from src.aesuelogit.etl import get_design_tensor, get_y_tensor, data_curation
+from src.aesuelogit.descriptive_statistics import mse, btcg_mse, mnrmse
 
 # Seed for reproducibility
 _SEED = 2022
@@ -100,17 +101,7 @@ features_Z = ['speed_sd', 'median_inc', 'incidents', 'bus_stops', 'intersections
 # features_Z = ['speed_sd']
 # features_Z = []
 
-utility_parameters = UtilityParameters(features_Y=['tt'],
-                                       features_Z=features_Z,
-                                       periods = 1,
-                                       initial_values={'tt': 0, 'c': 0, 's': 0, 'psc_factor': 0,
-                                                       'fixed_effect': np.zeros_like(fresno_network.links)},
-                                       signs={'tt': '-', 'speed_sd': '-', 'median_inc': '+', 'incidents': '-',
-                                              'bus_stops': '-', 'intersections': '-'},
-                                       trainables={'psc_factor': False, 'fixed_effect': False},
-                                       )
-
-utility_parameters.constant_initializer(0)
+# utility_parameters.constant_initializer(0)
 
 ## Data processing
 
@@ -122,7 +113,8 @@ X, Y = {}, {}
 # Select only dates used for previous paper
 # df = df.query('date == "2019-10-01"  | date == "2020-10-06"')
 # df = df.query('date == "2019-10-01"')
-# df = df.query('hour == 16')
+df = df.query('hour == 16')
+# df = df.query('hour == 17')
 
 print(df.query('year == 2019')[['counts', 'tt_ff', 'tt_avg', 'tf_inrix']].describe())
 
@@ -131,8 +123,9 @@ print(df.query('year == 2020')[['counts', 'tt_ff', 'tt_avg', 'tf_inrix']].descri
 # Normalization of features to range [0,1]
 
 # (TODO: may enable normalization in get_design_tensor method. See if tensorflow have it)
-df[features_Z + ['tt_avg'] + ['tt_ff']] \
-    = preprocessing.MaxAbsScaler().fit_transform(df[features_Z + ['tt_avg'] + ['tt_ff']])
+# TODO: exclude test data from transform to avoid data leakage
+# df[features_Z + ['tt_avg'] + ['tt_ff']] \
+#     = preprocessing.MaxAbsScaler().fit_transform(df[features_Z + ['tt_avg'] + ['tt_ff']])
 
 # Set free flow travel times
 # tt_ff_links = df.query('link_type == "LWRLK"').groupby('link_key')['tt_ff'].min()
@@ -140,6 +133,11 @@ tt_ff_links = df.groupby('link_key')['tt_ff'].min()
 # [(link.bpr.tf,link.link_type) for link in fresno_network.links if link.link_type == "LWRLK"]
 for link in fresno_network.links:
     fresno_network.links_dict[link.key].performance_function.tf = float(tt_ff_links[tt_ff_links.index==str(link.key)])
+
+tt_ff_links.mean()
+df[['tt_avg','tt_ff','tf_inrix']].mean()
+
+df['tt_ff'] = df.groupby('link_key')['tt_ff'].transform(lambda x: x.min())
 
 #Testing
 # df['tt_avg'] = df['tt_ff']
@@ -174,63 +172,55 @@ for year in sorted(df['year'].unique()):
 # plt.legend(loc='upper right')
 # plt.show()
 
+# df.tt_ff.mean()
+# df.tt_avg.mean()
+
 ## Training
 
 # Prepare the training and validation dataset
 # X, Y = tf.concat(list(X.values()),axis = 0), tf.concat(list(Y.values()),axis = 0)
-# X_train, X_val, Y_train, Y_val = train_test_split(X.numpy(), Y.numpy(), test_size=0.5, random_state=42)
-X_train, X_val, Y_train, Y_val = X[2019], X[2020], Y[2019], Y[2020]
+# X_train, X_test, Y_train, Y_test = train_test_split(X.numpy(), Y.numpy(), test_size=0.5, random_state=42)
+X_train, X_test, Y_train, Y_test = X[2019], X[2020], Y[2019], Y[2020]
 
-X_train, X_val, Y_train, Y_val = [tf.constant(i) for i in [X_train, X_val, Y_train, Y_val]]
-
-_EPOCHS = 3
-_BATCH_SIZE = 8
-_LR = 5e-2  # Default is 1e-3. With 1e-1, training becomes unstable
+X_train, X_test, Y_train, Y_test = [tf.constant(i) for i in [X_train, X_test, Y_train, Y_test]]
 
 # models = dict.fromkeys(['m0', 'm1', 'm2', 'm3', 'm4'], True)
-models = dict.fromkeys(['m0', 'm1', 'm2', 'm3', 'm4'], False)
-models['m0'] = True
-# models['m1'] = True
-# models['m2'] = True
-# models['m3'] = True
-# models['m4'] = True
-
-equilibrator = Equilibrator(
-    network=fresno_network,
-    # paths_generator=paths_generator,
-    utility=utility_parameters,
-    max_iters=100,
-    method='fw',
-    iters_fw=50,
-    accuracy=1e-4,
-)
-
-column_generator = ColumnGenerator(equilibrator=equilibrator,
-                                   utility=utility_parameters,
-                                   n_paths=0,
-                                   ods_coverage=0.1,
-                                   ods_sampling='sequential',
-                                   # ods_sampling='demand',
-                                   )
+run_model = dict.fromkeys(['equilibrium', 'isuelogit', 'odlue', 'odlulce', 'tvodlulce'], False)
+# run_model['equilibrium'] = True
+# run_model['isuelogit'] = True
+# run_model['odlue'] = True
+run_model['odlulce'] = True
+#
+# TODO: It will be not included for IATBR abstract and maybe not in paper 2
+# run_model['tvodlulce'] = True
 
 train_losses_dfs = {}
 val_losses_dfs = {}
 
 
-if models['m0']:
+if run_model['equilibrium']:
 
-    print('Equilibrium computation with Autoencoder')
+    _EPOCHS = 50
+    _BATCH_SIZE = 16
+    _LR = 5e-1 # Default is 1e-3. With 1e-1, training becomes unstable
+    _RELATIVE_GAP = 1e-4
+
+    print('Equilibrium computation with autoencoder')
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
                                            periods=1,
-                                           initial_values={'tt': -1, 'psc_factor': 0,
+                                           initial_values={'tt': 0, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(fresno_network.links)},
                                            signs={'tt': '-', 'speed_sd': '-', 'median_inc': '+', 'incidents': '-',
                                                   'bus_stops': '-', 'intersections': '-'},
-                                           trainables={'psc_factor': False, 'fixed_effect': False, 'tt': False},
+                                           trainables={'psc_factor': False, 'fixed_effect': False,
+                                                       'tt': False, 'speed_sd': False, 'median_inc': False,
+                                                       'incidents': False,
+                                                       'bus_stops': False, 'intersections': False
+                                                       },
                                            )
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
@@ -246,29 +236,29 @@ if models['m0']:
                                  historic_values={1: fresno_network.q.flatten()},
                                  trainable=False)
 
-    model_0a = AETSUELOGIT(
-        key='model_0a',
-        endogenous_traveltimes=True,
+    equilibrator = Equilibrator(
         network=fresno_network,
-        dtype=tf.float64,
-        equilibrator = equilibrator,
-        column_generator = column_generator,
+        # paths_generator=paths_generator,
         utility=utility_parameters,
-        bpr=bpr_parameters,
-        od=od_parameters
+        max_iters=100,
+        method='fw',
+        iters_fw=50,
+        accuracy=1e-4,
     )
-    
-    train_losses_dfs['model_0a'], val_losses_dfs['model_0a'] = model_0a.train(
-        X_train, Y_train, X_val, Y_val,
-        # generalization_error={'train': False, 'validation': True},
-        optimizer=optimizer,
-        batch_size=_BATCH_SIZE,
-        loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'bpr': 0, 'eq_tt': 1e5},
-        epochs=_EPOCHS)
 
-    model_0b = AESUELOGIT(
-        key='model_0b',
-        endogenous_flows=True,
+    column_generator = ColumnGenerator(equilibrator=equilibrator,
+                                       utility=utility_parameters,
+                                       n_paths=0,
+                                       ods_coverage=0.1,
+                                       ods_sampling='sequential',
+                                       # ods_sampling='demand',
+                                       )
+
+    print("\nLink flow based autoencoder")
+    
+    model_0a = GISUELOGIT(
+        key='model_0a',
+        # endogenous_flows=True,
         network=fresno_network,
         dtype=tf.float64,
         equilibrator=equilibrator,
@@ -277,23 +267,66 @@ if models['m0']:
         bpr=bpr_parameters,
         od=od_parameters
     )
-
-    train_losses_dfs['model_0b'], val_losses_dfs['model_0b'] = model_0b.train(
-        X_train, Y_train, X_val, Y_val,
+    # X_train.shape
+    # Y_train.shape
+    train_losses_dfs['model_0a'], val_losses_dfs['model_0a'] = model_0a.train(
+        X_train, Y_train, X_test, Y_test,
         # generalization_error={'train': False, 'validation': True},
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
-        loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'bpr': 0, 'eq_flow': 1e5},
+        loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'bpr': 0, 'eq_flow': 1},
+        threshold_relative_gap=_RELATIVE_GAP,
         epochs=_EPOCHS)
+    
+    # print("\nTravel time based autoencoder")
+    # model_0b = AETSUELOGIT(
+    #     key='model_0b',
+    #     # endogenous_traveltimes=True,
+    #     network=fresno_network,
+    #     dtype=tf.float64,
+    #     equilibrator=equilibrator,
+    #     column_generator=column_generator,
+    #     utility=utility_parameters,
+    #     bpr=bpr_parameters,
+    #     od=od_parameters
+    # )
+    #
+    # train_losses_dfs['model_0b'], val_losses_dfs['model_0b'] = model_0b.train(
+    #     X_train, Y_train, X_test, Y_test,
+    #     # generalization_error={'train': False, 'validation': True},
+    #     optimizer=optimizer,
+    #     batch_size=_BATCH_SIZE,
+    #     loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'bpr': 0, 'eq_tt': 1e5},
+    #     epochs=_EPOCHS)
 
+    plot_predictive_performance(train_losses=train_losses_dfs['model_0a'], val_losses=val_losses_dfs['model_0a'])
 
-
-if models['m1']:
+if run_model['isuelogit']:
     print('\nmodel 1: Benchmark of aesuelogit and isuelogit (utility only)')
 
-    _LR = 5e-1
+    _EPOCHS = 200
+    _BATCH_SIZE = 16
+    _LR = 1e-1
+    _RELATIVE_GAP = 1e-4
 
-    optimizer = NGD(learning_rate=_LR)
+    # optimizer = NGD(learning_rate=_LR)
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
+
+    utility_parameters = UtilityParameters(features_Y=['tt'],
+                                           features_Z=features_Z,
+                                           periods=1,
+                                           initial_values={'psc_factor': 0,
+                                                           'fixed_effect': np.zeros_like(fresno_network.links)},
+                                           signs={'tt': '-', 'speed_sd': '-', 'median_inc': '+', 'incidents': '-',
+                                                  'bus_stops': '-', 'intersections': '-'},
+                                           trainables={'psc_factor': False, 'fixed_effect': True,
+                                                       'tt': True, 'speed_sd': True, 'median_inc': True, 'incidents': True,
+                                                              'bus_stops': True, 'intersections': True
+                                                       },
+                                           )
+
+    utility_parameters.constant_initializer(0)
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
                                    initial_values={'alpha': 0.15, 'beta': 4},
@@ -308,9 +341,29 @@ if models['m1']:
                                  historic_values={1: fresno_network.q.flatten()},
                                  trainable=False)
 
-    model_1 = AETSUELOGIT(
+    equilibrator = Equilibrator(
+        network=fresno_network,
+        # paths_generator=paths_generator,
+        utility=utility_parameters,
+        max_iters=100,
+        method='fw',
+        iters_fw=50,
+        accuracy=1e-4,
+    )
+
+    column_generator = ColumnGenerator(equilibrator=equilibrator,
+                                       utility=utility_parameters,
+                                       n_paths=0,
+                                       ods_coverage=0.1,
+                                       ods_sampling='sequential',
+                                       # ods_sampling='demand',
+                                       )
+
+    model_1 = GISUELOGIT(
         key='model_1',
         network=fresno_network,
+        # endogenous_flows=False,
+        # endogenous_traveltimes=False,
         dtype=tf.float64,
         equilibrator = equilibrator,
         column_generator = column_generator,
@@ -320,11 +373,13 @@ if models['m1']:
     )
 
     train_losses_dfs['model_1'], val_losses_dfs['model_1'] = model_1.train(
-        X_train, Y_train, X_val, Y_val,
+        X_train, Y_train, X_test, Y_test,
         # generalization_error={'train': False, 'validation': True},
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
-        loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 1, 'bpr': 0, 'eq_tt': 1e5},
+        loss_weights={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1},
+        # loss_metric=mnrmse,
+        threshold_relative_gap=_RELATIVE_GAP,
         epochs=_EPOCHS)
 
     plot_predictive_performance(train_losses=train_losses_dfs['model_1'], val_losses=val_losses_dfs['model_1'])
@@ -335,11 +390,30 @@ if models['m1']:
     print(f"alpha = {model_1.alpha: 0.2f}, beta  = {model_1.beta: 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(model_1.q - fresno_network.q.flatten())): 0.2f}")
 
-if models['m2']:
-    print('\nmodel 2: OD + utility estimation with historic OD')
+if run_model['odlue']:
+    print('\nmodel 2: ODLUE (OD + utility estimation with historic OD)')
+
+    _EPOCHS = 200
+    _BATCH_SIZE = 16
+    _LR = 1e-1
+    _RELATIVE_GAP = 1e-4
 
     # optimizer = tf.keras.optimizers.Adagrad(learning_rate=_LR)
     optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
+
+    utility_parameters = UtilityParameters(features_Y=['tt'],
+                                           features_Z=features_Z,
+                                           periods=1,
+                                           initial_values={'psc_factor': 0,
+                                                           'fixed_effect': np.zeros_like(fresno_network.links)},
+                                           signs={'tt': '-', 'speed_sd': '-', 'median_inc': '+', 'incidents': '-',
+                                                  'bus_stops': '-', 'intersections': '-'},
+                                           trainables={'psc_factor': False, 'fixed_effect': True,
+                                                       'tt': True, 'speed_sd': True, 'median_inc': True,
+                                                       'incidents': True,
+                                                       'bus_stops': True, 'intersections': True
+                                                       },
+                                           )
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
                                    initial_values={'alpha': 0.15, 'beta': 4},
@@ -352,7 +426,25 @@ if models['m2']:
                                  historic_values={1: fresno_network.q.flatten()},
                                  trainable=True)
 
-    model_2 = AETSUELOGIT(
+    equilibrator = Equilibrator(
+        network=fresno_network,
+        # paths_generator=paths_generator,
+        utility=utility_parameters,
+        max_iters=100,
+        method='fw',
+        iters_fw=50,
+        accuracy=1e-4,
+    )
+
+    column_generator = ColumnGenerator(equilibrator=equilibrator,
+                                       utility=utility_parameters,
+                                       n_paths=0,
+                                       ods_coverage=0.1,
+                                       ods_sampling='sequential',
+                                       # ods_sampling='demand',
+                                       )
+
+    model_2 = GISUELOGIT(
         key='model_2',
         network=fresno_network,
         dtype=tf.float64,
@@ -364,14 +456,15 @@ if models['m2']:
     )
 
     train_losses_dfs['model_2'], val_losses_dfs['model_2'] = model_2.train(
-        X_train, Y_train, X_val, Y_val,
+        X_train, Y_train, X_test, Y_test,
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
         # generalization_error={'train': False, 'validation': True},
-        loss_weights={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'bpr': 0},
+        loss_weights={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 10},
+        threshold_relative_gap=_RELATIVE_GAP,
         epochs=_EPOCHS)
 
-    plot_predictive_performance(train_losses=train_losses_dfs['model_2'], val_losses=val_losses_dfs['model_2'])
+    plot_predictive_performance(train_losses=train_losses_dfs['model_2'], val_losses=val_losses_dfs['model_2'], xticks_spacing = 10)
 
     plt.show()
 
@@ -379,23 +472,69 @@ if models['m2']:
     print(f"alpha = {model_2.alpha: 0.2f}, beta  = {model_2.beta: 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(model_2.q - fresno_network.q.flatten())): 0.2f}")
 
-if models['m3']:
+if run_model['odlulce']:
 
-    print('\nmodel 3: ODLUE + link performance parameters without historic OD matrix')
+    _EPOCHS = 200
+    _BATCH_SIZE = 16
+    _LR = 1e-1
+    _RELATIVE_GAP = 1e-4
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
+
+    print('\nmodel 3: ODLUE + link performance parameters with historic OD matrix')
+
+    # Some initializations of the bpr parameters, makes the optimization to fail (e.g. alpha =1, beta = 1). Using a common
+    # alpha but different betas for every link make the estimation more stable and there is no overfitting.
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
-                                   initial_values={'alpha': 0.15, 'beta': 1},
+                                   # initial_values={'alpha': 0.15*np.ones_like(fresno_network.links,dtype = np.float32),
+                                   #                 'beta': 4*np.ones_like(fresno_network.links,dtype = np.float32)},
+                                   initial_values={'alpha': 0.15,
+                                                   'beta': 4 * np.ones_like(fresno_network.links, dtype=np.float32)},
                                    # initial_values={'alpha': 0.15, 'beta': 4},
-                                   trainables={'alpha': True, 'beta':False},
+                                   # initial_values={'alpha': 0.15, 'beta': 4},
+                                   trainables={'alpha': True, 'beta':True},
                                    )
 
     od_parameters = ODParameters(key='od',
                                  periods=1,
                                  initial_values=fresno_network.q.flatten(),
-                                 # historic_values={1: fresno_network.q.flatten()},
+                                 historic_values={1: fresno_network.q.flatten()},
                                  trainable=True)
 
-    model_3 = AETSUELOGIT(
+    utility_parameters = UtilityParameters(features_Y=['tt'],
+                                           features_Z=features_Z,
+                                           periods=1,
+                                           initial_values={'psc_factor': 0, 'tt':0,
+                                                           'fixed_effect': np.zeros_like(fresno_network.links)},
+                                           signs={'tt': '-', 'speed_sd': '-', 'median_inc': '+', 'incidents': '-',
+                                                  'bus_stops': '-', 'intersections': '-'},
+                                           trainables={'psc_factor': False, 'fixed_effect': True,
+                                                       'tt': True, 'speed_sd': True, 'median_inc': True,
+                                                       'incidents': True,
+                                                       'bus_stops': True, 'intersections': True
+                                                       },
+                                           )
+
+    equilibrator = Equilibrator(
+        network=fresno_network,
+        # paths_generator=paths_generator,
+        utility=utility_parameters,
+        max_iters=100,
+        method='fw',
+        iters_fw=50,
+        accuracy=1e-4,
+    )
+
+    column_generator = ColumnGenerator(equilibrator=equilibrator,
+                                       utility=utility_parameters,
+                                       n_paths=0,
+                                       ods_coverage=0.1,
+                                       ods_sampling='sequential',
+                                       # ods_sampling='demand',
+                                       )
+
+    model_3 = GISUELOGIT(
         key='model_3',
         network=fresno_network,
         dtype=tf.float64,
@@ -406,23 +545,25 @@ if models['m3']:
         od=od_parameters,
     )
 
+    #TODO: sometimes gradient computation fail when eq_flow is added in the objective function
+
     train_losses_dfs['model_3'], val_losses_dfs['model_3'] = model_3.train(
-        X_train, Y_train, X_val, Y_val,
+        X_train, Y_train, X_test, Y_test,
         optimizer=optimizer,
         # generalization_error={'train': False, 'validation': True},
         batch_size=_BATCH_SIZE,
-        loss_weights={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'bpr': 0},
+        loss_weights={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1},
+        threshold_relative_gap=_RELATIVE_GAP,
+        # loss_metric=mnrmse,
         epochs=_EPOCHS)
 
-    plot_predictive_performance(train_losses=train_losses_dfs['model_3'], val_losses=val_losses_dfs['model_3'])
-
-    plt.show()
+    plot_predictive_performance(train_losses=train_losses_dfs['model_3'], val_losses=val_losses_dfs['model_3'], xticks_spacing = 10)
 
     print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(model_3.theta.numpy())))}")
-    print(f"alpha = {model_3.alpha: 0.2f}, beta  = {model_3.beta: 0.2f}")
+    print(f"alpha = {np.mean(model_3.alpha): 0.2f}, beta  = {np.mean(model_3.beta): 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(model_3.q - fresno_network.q.flatten())): 0.2f}")
 
-if models['m4']:
+if run_model['tvodlulce']:
     print('\nmodel 4: Time specific utility and OD, link performance parameters, no historic OD')
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
@@ -447,7 +588,7 @@ if models['m4']:
                                  initial_values=fresno_network.q.flatten(),
                                  trainable=True)
 
-    model_4 = AETSUELOGIT(
+    model_4 = GISUELOGIT(
         key='model_4',
         network=fresno_network,
         dtype=tf.float64,
@@ -459,11 +600,12 @@ if models['m4']:
     )
 
     train_losses_dfs['model_4'], val_losses_dfs['model_4'] = model_4.train(
-        X_train, Y_train, X_val, Y_val,
+        X_train, Y_train, X_test, Y_test,
         optimizer=optimizer,
         # generalization_error={'train': False, 'validation': True},
         batch_size=_BATCH_SIZE,
-        loss_weights={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'bpr': 0},
+        loss_weights={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'bpr': 0, 'eq_flow': 1},
+        threshold_relative_gap=_RELATIVE_GAP,
         epochs=_EPOCHS)
 
     plot_predictive_performance(train_losses=train_losses_dfs['model_4'], val_losses=val_losses_dfs['model_4'])
