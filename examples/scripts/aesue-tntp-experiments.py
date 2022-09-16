@@ -5,6 +5,8 @@ import random
 import isuelogit as isl
 import numpy as np
 import tensorflow as tf
+import pandas as pd
+from sklearn.model_selection import train_test_split
 
 # Path management
 main_dir = str(Path(os.path.abspath('')).parents[1])
@@ -14,10 +16,11 @@ print('main dir:', main_dir)
 # isl.config.dirs['read_network_data'] = "input/network-data/SiouxFalls/"
 
 # Internal modules
-from src.aesuelogit.models import UtilityParameters, BPRParameters, ODParameters, AETSUELOGIT, NGD
+from src.aesuelogit.models import UtilityParameters, BPRParameters, ODParameters, GISUELOGIT, AETSUELOGIT, NGD
 from src.aesuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator, ColumnGenerator
 from src.aesuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data
 from src.aesuelogit.experiments import MultidayExperiment, ConvergenceExperiment
+from src.aesuelogit.visualizations import plot_predictive_performance
 
 # Seed for reproducibility
 _SEED = 2022
@@ -27,11 +30,13 @@ random.seed(_SEED)
 tf.random.set_seed(_SEED)
 
 # Experiments
-list_experiments = ['convergence', 'multiday', 'noisy_counts', 'noisy_od', 'ill_scaled_od']
+list_experiments = ['equilibrium','isuelogit', 'convergence', 'multiday', 'noisy_counts', 'noisy_od', 'ill_scaled_od']
 
-run_experiment = dict.fromkeys(list_experiments,True)
-# run_experiment = dict.fromkeys(list_experiments, False)
+# run_experiment = dict.fromkeys(list_experiments,True)
+run_experiment = dict.fromkeys(list_experiments, False)
 
+run_experiment['equilibrium'] = True
+run_experiment['isuelogit'] = True
 # run_experiment['convergence'] = True
 # run_experiment['multiday'] = True
 # run_experiment['noisy_counts'] = True
@@ -48,7 +53,7 @@ Q = isl.reader.read_tntp_od(network_name=network_name)
 tntp_network.load_OD(Q=Q)
 
 # Paths
-load_k_shortest_paths(network=tntp_network, k=2, update_incidence_matrices=True)
+load_k_shortest_paths(network=tntp_network, k=4, update_incidence_matrices=True)
 # features_Z = []
 
 # Read synthethic data which was generated under the assumption of path sets of size 2.
@@ -72,13 +77,18 @@ features_Z.extend(features_sparse)
 # Add free flow travel times
 # df['tt_ff'] = np.tile([link.bpr.tf for link in tntp_network.links], n_days)
 
-# X_train, X_val, y_train, y_val = train_test_split(input_data, traveltime_data, test_size=0.2, random_state=42)
+X = get_design_tensor(Z=df[features_Z], n_links=n_links, n_days=n_days, n_hours=n_hours)
 
 traveltime_data = get_design_tensor(y=df['traveltime'], n_links=n_links, n_days=n_days, n_hours=n_hours)
 flow_data = get_y_tensor(y=df[['counts']], n_links=n_links, n_days=n_days, n_hours=n_hours)
-
 Y = tf.concat([traveltime_data, flow_data], axis=3)
-X = get_design_tensor(Z=df[['traveltime'] + features_Z], n_links=n_links, n_days=n_days, n_hours=n_hours)
+
+indices = list(range(X.shape[0]))
+
+train_idxs, test_idxs = train_test_split(indices, test_size=0.2, random_state=42)
+
+X, Y = X.numpy(), Y.numpy()
+X_train, X_test, Y_train, Y_test = X[train_idxs,:,:,:], X[test_idxs,:,:,:],Y[train_idxs,:,:,:],Y[test_idxs,:,:,:]
 
 equilibrator = Equilibrator(
     network=tntp_network,
@@ -99,9 +109,7 @@ equilibrator = Equilibrator(
 #                                    )
 ## Learning parameters
 
-_EPOCHS = 4
-_BATCH_SIZE = None  # None
-_LR = 5e-2
+
 
 utility_parameters = UtilityParameters(features_Y=['tt'],
                                        features_Z=features_Z,
@@ -111,6 +119,9 @@ utility_parameters = UtilityParameters(features_Y=['tt'],
                                        trainables={'psc_factor': False, 'fixed_effect': False},
                                        # trainables = None, #['features','psc_factor, fixed_effect']
                                        )
+
+
+
 
 
 if run_experiment['convergence']:
