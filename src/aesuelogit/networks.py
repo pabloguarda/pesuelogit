@@ -204,6 +204,13 @@ class ColumnGenerator():
 def build_tntp_network(network_name) -> TransportationNetwork:
     '''
     Read data from tntp repository and build network object
+
+    supported_networks = ['Anaheim', 'Austin', 'Barcelona', 'Berlin-Center', 'Berlin-Friedrichshain',
+                      'Berlin-Mitte-Center', 'Berlin-Mitte-Prenzlauerberg-Friedrichshain-Center',
+                      'Berlin-Prenzlauerberg-Center', 'Berlin-Tiergarten', 'Birmingham-England', 'Braess-Example',
+                      'chicago-regional', 'Chicago-Sketch', 'Eastern-Massachusetts', 'GoldCoast, Australia',
+                      'Hessen-Asymmetric', 'Philadelphia', 'SiouxFalls', 'Sydney, Australia', 'Terrassa-Asymmetric',
+                      'Winnipeg', 'Winnipeg-Asymmetric']
     '''
 
     links_df = isl.reader.read_tntp_linkdata(network_name=network_name)
