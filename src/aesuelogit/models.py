@@ -354,15 +354,22 @@ class GISUELOGIT(tf.keras.Model):
             name='flows',
             dtype=self.dtype)
 
+        # Log is to avoid that parameters are lower and equal than zero.
+        # Sqrt is to avoid that that parameters are strictly lower than zero
+
         if keys.get('alpha', False):
-            self._alpha = tf.Variable(np.log(self.bpr.parameters['alpha'].initial_value),
+            self._alpha = tf.Variable(
+                # self.bpr.parameters['alpha'].initial_value,
+                np.log(self.bpr.parameters['alpha'].initial_value),
+                # np.sqrt(self.bpr.parameters['alpha'].initial_value),
                                       trainable=self.bpr.parameters['alpha'].trainable,
                                       name=self.bpr.parameters['alpha'].key,
                                       dtype=self.dtype)
         if keys.get('beta', False):
             self._beta = tf.Variable(
-                # np.log(self.bpr.parameters['beta'].initial_value),
-                self.bpr.parameters['beta'].initial_value,
+                # self.bpr.parameters['beta'].initial_value,
+                np.log(self.bpr.parameters['beta'].initial_value),
+                # np.sqrt(self.bpr.parameters['beta'].initial_value),
                 trainable=self.bpr.parameters['beta'].trainable,
                 name=self.bpr.parameters['beta'].key,
                 dtype=self.dtype)
@@ -466,8 +473,14 @@ class GISUELOGIT(tf.keras.Model):
 
     def path_size_correction(self, Vf):
 
-        return Vf + self.psc_factor * tf.math.log(tf.constant(
-            isl.paths.compute_path_size_factors(D=self.network.D, paths_od=self.network.paths_od).flatten()))
+        path_utilities = Vf
+
+        if self.psc_factor == 0:
+            return path_utilities
+        else:
+            return path_utilities + self.psc_factor * tf.math.log(tf.constant(
+                isl.paths.compute_path_size_factors(D=self.network.D, paths_od=self.network.paths_od).flatten()))
+
 
         # return Vf + self.psc_factor * tf.constant(
         #     isl.paths.compute_path_size_factors(D=self.network.D, paths_od=self.network.paths_od).flatten())
@@ -498,11 +511,18 @@ class GISUELOGIT(tf.keras.Model):
 
     def mask_predicted_traveltimes(self,x,k, k_threshold = 1e5):
 
-        mask1 = np.where((k >= k_threshold) | (self.tt_ff == 0), 1, 0)
-        mask2 = np.where((k >= k_threshold), 1, 0)
-        mask3 = np.where((self.tt_ff == 0), 1, 0)
+        # mask1 = np.where((k >= k_threshold) | (self.tt_ff == 0), 1, 0)
+        # mask2 = np.where((k >= k_threshold), 1, 0)
+        # mask3 = np.where((self.tt_ff == 0), 1, 0)
+        #
+        # return (1-mask1)*(1-mask2)*self.tt_ff * (1 + self.alpha * tf.math.pow(x / k, self.beta)) + (1-mask3)*mask2*self.tt_ff
 
-        return (1-mask1)*self.tt_ff * (1 + self.alpha * tf.math.pow(x / k, self.beta)) + (1-mask3)*mask2*self.tt_ff
+        mask1 = np.where((k >= k_threshold), 1, 0)
+        mask2 = np.where((self.tt_ff == 0), 1, 0)
+
+        tt = self.tt_ff * (1 + self.alpha * tf.math.pow(x / k, self.beta))
+
+        return (1-mask2)*((1-mask1)*tt+ mask1*self.tt_ff)
 
     def bpr_traveltimes(self, x):
         """
@@ -597,14 +617,23 @@ class GISUELOGIT(tf.keras.Model):
 
     @property
     def alpha(self):
-        return tf.exp(self._alpha)
+
+        # Without the exponential trick, the estimation of alpha is highly unstable.
+
+        # return tf.clip_by_value(self._alpha, self._epsilon, 1e10)
+        # return tf.exp(self._alpha)
+        return tf.clip_by_value(tf.exp(self._alpha), 0, 1)
+        # return tf.clip_by_value(tf.math.pow(self._alpha,2),0,1e10)
 
     @property
     def beta(self):
-        # return tf.clip_by_value(self._beta, 0 + self._epsilon, 5)
-        # return tf.clip_by_value(tf.exp(self._beta),1,5)
-        return tf.clip_by_value(self._beta, 1, 5)
-        # return self._beta
+        # return tf.clip_by_value(self._beta, self._epsilon, 10)
+        return tf.clip_by_value(tf.exp(self._beta),1,5)
+        # return tf.clip_by_value(self._beta, 1, 5)
+        # return tf.exp(self._beta)
+
+        # return tf.math.pow(self._beta, 2)
+        # return tf.clip_by_value(tf.math.pow(self._beta, 2),0,10)
 
     @property
     def tt_ff(self):
@@ -726,11 +755,16 @@ class GISUELOGIT(tf.keras.Model):
 
     def mask_observed_traveltimes(self,tt,k,k_threshold = 1e5):
 
-        mask1 = np.where((k >= k_threshold) | (self.tt_ff == 0), 1, 0)
-        mask2 = np.where((k >= k_threshold), 1, 0)
-        mask3 = np.where((self.tt_ff == 0), 1, 0)
+        # mask1 = np.where((k >= k_threshold) | (self.tt_ff == 0), 1, 0)
+        # mask2 = np.where((k >= k_threshold), 1, 0)
+        # mask3 = np.where((self.tt_ff == 0), 1, 0)
+        #
+        # return (1-mask3)*((1-mask1)*tt + mask2*self.tt_ff)
 
-        return (1-mask1)*tt + (1-mask3)*mask2*self.tt_ff
+        mask1 = np.where((k >= k_threshold), 1, 0)
+        mask2 = np.where((self.tt_ff == 0), 1, 0)
+
+        return (1-mask2)*((1-mask1)*tt + self.tt_ff)
 
     def loss_function(self,
                       X,
@@ -764,11 +798,14 @@ class GISUELOGIT(tf.keras.Model):
             k = np.array([link.bpr.k for link in self.network.links])
             self.observed_traveltimes = self.mask_observed_traveltimes(tt = self.observed_traveltimes, k = k)
 
+            # Under recurrent traffic conditions, we assume that the equilibrium flow and travel time is the same regardless the day  Thus, using self.flows() or self.traveltimes() is preferred.
             predicted_flow = self.compute_link_flows(X)
             predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
+            output_flow = predicted_flow
 
             # predicted_flow = self.flows()
             # predicted_traveltimes = self.traveltimes()
+            # output_flow = self.compute_link_flows(X)
 
             # np.nanmean(self.observed_traveltimes)
             # np.nanmean(predicted_traveltimes)
@@ -777,6 +814,7 @@ class GISUELOGIT(tf.keras.Model):
                 'od': loss_metric(actual=tf.constant(self.od.historic_values[1].flatten()),
                                   predicted=self.q),
                 'flow': loss_metric(actual=self.observed_flows, predicted=predicted_flow),
+                # 'flow': loss_metric(actual=self.observed_flows, predicted=output_flow),
                 'tt': loss_metric(actual=self.observed_traveltimes, predicted=predicted_traveltimes),
                 # 'theta': tf.reduce_mean(tf.norm(self.theta, 1)),
                 # #todo: review bpr or tt loss, should they be equivalent?
@@ -787,7 +825,7 @@ class GISUELOGIT(tf.keras.Model):
 
         #TODO: allows for computation even when they are not endogenous (create method flow())
         if self.endogenous_flows:
-            loss['eq_flow'] = loss_metric(actual=self.flows(), predicted=predicted_flow)
+            loss['eq_flow'] = loss_metric(actual=self.flows(), predicted=output_flow)
 
             # loss['eq_flow'] = tf.reduce_mean(tf.divide(predicted_flow,self.flows())) #-1
             # np.nanmean(np.abs(1 * (tf.divide(predicted_flow, self.flows()))))
@@ -798,7 +836,7 @@ class GISUELOGIT(tf.keras.Model):
             # np.mean(np.abs(100*(self.flows()/predicted_flow-1)))
             # np.mean(self.observed_flows)
         else:
-            loss['eq_flow'] = loss_metric(actual=self.bpr_flows(self.traveltimes()), predicted=predicted_flow)
+            loss['eq_flow'] = loss_metric(actual=self.bpr_flows(self.traveltimes()), predicted=output_flow)
 
         if self.endogenous_traveltimes:
             loss['eq_tt'] = loss_metric(actual=self.traveltimes(), predicted=predicted_traveltimes)
@@ -894,6 +932,7 @@ class GISUELOGIT(tf.keras.Model):
               loss_metric=None,
               generalization_error: Dict[str, bool] = None,
               epochs=1,
+              epochs_print_interval:int = 1,
               batch_size=None) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
         """ It assumes the first column of tensors X_train and X_val are the free flow travel times. The following
@@ -917,7 +956,8 @@ class GISUELOGIT(tf.keras.Model):
 
         # if self.endogenous_flows:
         # Smart initialization is performed running a single pass of traffic assignment under initial theta and q
-        self._flows.assign(tf.math.sqrt(tf.reduce_mean(predicted_flow,axis = 0)))
+        # self._flows.assign(tf.math.sqrt(tf.reduce_mean(predicted_flow,axis = 0)))
+        self._flows.assign(tf.math.sqrt(predicted_flow))
         # self._flows.assign(tf.squeeze(tf.reduce_mean(self.call(tf.unstack(Y_train,axis = -1)[1]),axis=-1)))
 
         if self.endogenous_traveltimes:
@@ -947,33 +987,36 @@ class GISUELOGIT(tf.keras.Model):
         estimates = []
 
         relative_gap = 1e10
+        terminate_algorithm = False
 
         sue_objectives = []
 
-        while epoch <= epochs and abs(relative_gap) > threshold_relative_gap:
+        while not terminate_algorithm:
 
-            estimates.append(self.get_parameters_estimates())
+            if not terminate_algorithm:
 
-            path_flows = self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X_train))))
-            link_flow = self.link_flows(path_flows)
-            relative_x = float(np.nanmean(np.abs(1 * (tf.divide(link_flow,self.flows()) - 1))))
+                estimates.append(self.get_parameters_estimates())
 
-            sue_objective = sue_objective_function_fisk(f = path_flows[0,0,:].numpy().flatten(),
-                                                        X = X_train[0, 0, :, :],
-                                                        theta = dict(zip(self.utility.features,self.theta.numpy())),
-                                                        k_Z = self.utility.features_Z,
-                                                        k_Y= self.utility.features_Y,
-                                                        network = self.network)
+                path_flows = self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X_train))))
+                link_flow = self.link_flows(path_flows)
+                relative_x = float(np.nanmean(np.abs(1 * (tf.divide(link_flow,self.flows()) - 1))))
 
-            sue_objectives.append(sue_objective)
+                sue_objective = sue_objective_function_fisk(f = path_flows[0,0,:].numpy().flatten(),
+                                                            X = X_train[0, 0, :, :],
+                                                            theta = dict(zip(self.utility.features,self.theta.numpy())),
+                                                            k_Z = self.utility.features_Z,
+                                                            k_Y= self.utility.features_Y,
+                                                            network = self.network)
 
-            if len(sue_objectives)>=2:
-                relative_gap = (sue_objectives[-1] / sue_objectives[-2] - 1)
-                # print(f"{relative_gap:0.2g}")
-                # print(sue_objective)
+                sue_objectives.append(sue_objective)
 
-            if epoch % 1 == 0:
-                print(f"\nEpoch: {epoch}, n_train: {X_train.shape[0]}, n_test: {X_val.shape[0]}")
+                if len(sue_objectives)>=2:
+                    relative_gap = (sue_objectives[-1] / sue_objectives[-2] - 1)
+                    # print(f"{relative_gap:0.2g}")
+                    # print(sue_objective)
+
+
+
                 # print(f"{i}: loss={loss.numpy():0.4g}, theta = {model.theta.numpy()}")
                 train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights, loss_metric=mse)
                 val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse)
@@ -985,6 +1028,13 @@ class GISUELOGIT(tf.keras.Model):
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)
+
+            if epoch > epochs or abs(relative_gap) < threshold_relative_gap:
+                terminate_algorithm = True
+
+            if epoch % epochs_print_interval == 0 or terminate_algorithm:
+
+                print(f"\nEpoch: {epoch}, n_train: {X_train.shape[0]}, n_test: {X_val.shape[0]}")
 
                 print(f"\n{epoch}: train_loss={float(train_loss['loss_total'].numpy()):0.2g}, "
                     f"val_loss={float(val_loss['loss_total'].numpy()):0.2g}, "
@@ -1017,10 +1067,9 @@ class GISUELOGIT(tf.keras.Model):
 
                 print(f"time: {time.time() - t0: 0.1f}")
 
-
                 t0 = time.time()
 
-            if train_loss['loss_total'] > 1e-8 and epoch <= epochs:
+            if not terminate_algorithm:
 
                 # Gradient based learning
 
@@ -1079,7 +1128,7 @@ class GISUELOGIT(tf.keras.Model):
         val_losses_df.loc[val_losses_df['epoch'] == 0, 'loss_od'] \
             = val_losses_df.loc[val_losses_df['epoch'] == 1, 'loss_od'].copy()
 
-        # Normalized losses
+        # Compution of relative losses
         # losses_columns = [column for column in train_losses_df.keys() if column not in ["loss_eq_flow"]]
         losses_columns = [column for column in train_losses_df.keys()]
         train_losses_df = self.normalized_losses(train_losses_df[losses_columns])#.assign(loss_eq_flow = train_losses_df['loss_eq_flow'])
@@ -1095,7 +1144,12 @@ class GISUELOGIT(tf.keras.Model):
 
     def compute_link_flows(self,X):
 
-        return self.link_flows(self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X)))))
+        link_flows = self.link_flows(self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X)))))
+
+        if tf.rank(link_flows) == 3:
+            link_flows = tf.reduce_mean(link_flows,axis = 0)
+
+        return link_flows
 
 
     def call(self, X):
