@@ -36,20 +36,20 @@ def plot_predictive_performance_twoaxes(train_losses: pd.DataFrame,
                                 val_losses: pd.DataFrame) -> None:
     fig, ax1 = plt.subplots()
 
-    ax1.plot(train_losses['epoch'], train_losses['loss_tt'], label="Train loss (travel time)", color='red',
+    ax1.plot(train_losses['epoch'], train_losses['loss_tt'], label="Travel time loss (train)", color='red',
              linestyle='-')
-    ax1.plot(val_losses['epoch'], val_losses['loss_tt'], label="Test loss (travel time)", color='red',
+    ax1.plot(val_losses['epoch'], val_losses['loss_tt'], label="Travel time loss (test)", color='red',
              linestyle='--')
-    ax1.plot(train_losses['epoch'], train_losses['loss_flow'], label="Train loss (flow)", color='blue', linestyle='-')
-    ax1.plot(val_losses['epoch'], val_losses['loss_flow'], label="Test loss (flow)", color='blue',
+    ax1.plot(train_losses['epoch'], train_losses['loss_flow'], label="Train flow loss (train)", color='blue', linestyle='-')
+    ax1.plot(val_losses['epoch'], val_losses['loss_flow'], label="Test flow loss (test)", color='blue',
              linestyle='--')
     # plt.plot(train_losses['epoch'], train_losses['loss_bpr'], label="Train loss (bpr)", color='gray', linestyle='-')
     # plt.plot(val_losses['epoch'], val_losses['loss_bpr'], label="Test loss (bpr)", color='gray',
     #          linestyle='--')
 
     ax2 = ax1.twinx()
-    ax2.plot(train_losses['epoch'], train_losses['loss_eq_flow'], label="Train loss (eq flow)", color='gray', linestyle='-')
-    ax2.plot(val_losses['epoch'], val_losses['loss_eq_flow'], label="Test loss (eq flow)", color='gray', linestyle='--')
+    ax2.plot(train_losses['epoch'], train_losses['loss_eq_flow'], label="Equilibrium loss (train)", color='gray', linestyle='-')
+    ax2.plot(val_losses['epoch'], val_losses['loss_eq_flow'], label="Equilibrium loss (test)", color='gray', linestyle='--')
 
     if 'generalization_error' in train_losses.keys():
         plt.plot(train_losses['epoch'], train_losses['generalization_error'], label="Train loss (generalization)",
@@ -83,10 +83,10 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
 
     ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
 
-    ax.plot(train_losses['epoch'], train_losses['loss_tt'], label="Train loss (travel time)", color='red', linestyle='-')
-    ax.plot(val_losses['epoch'], val_losses['loss_tt'], label="Test loss (travel time)", color='red',linestyle='--')
-    ax.plot(train_losses['epoch'], train_losses['loss_flow'], label="Train loss (flow)", color='blue', linestyle='-')
-    ax.plot(val_losses['epoch'], val_losses['loss_flow'], label="Test loss (flow)", color='blue', linestyle='--')
+    ax.plot(train_losses['epoch'], train_losses['loss_tt'], label="Travel time loss (train)", color='red', linestyle='-')
+    ax.plot(val_losses['epoch'], val_losses['loss_tt'], label="Travel time loss (test)", color='red',linestyle='--')
+    ax.plot(train_losses['epoch'], train_losses['loss_flow'], label="Link flow loss (train)", color='blue', linestyle='-')
+    ax.plot(val_losses['epoch'], val_losses['loss_flow'], label="Link flow loss (test)", color='blue', linestyle='--')
     # ax.plot(train_losses['epoch'], train_losses['loss_od'], label="Train loss (od)", color='green', linestyle='-')
     # ax.plot(val_losses['epoch'], val_losses['loss_od'], label="Test loss (od)", color='green', linestyle='--')
 
@@ -94,8 +94,8 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
     # plt.plot(val_losses['epoch'], val_losses['loss_bpr'], label="Test loss (bpr)", color='gray',
     #          linestyle='--')
 
-    ax.plot(train_losses['epoch'], train_losses['loss_eq_flow'], label="Train loss (eq flow)", color='gray', linestyle='-')
-    ax.plot(val_losses['epoch'], val_losses['loss_eq_flow'], label="Test loss (eq flow)", color='gray', linestyle='--')
+    ax.plot(train_losses['epoch'], train_losses['loss_eq_flow'], label="Equilibrium loss (train)", color='gray', linestyle='-')
+    ax.plot(val_losses['epoch'], val_losses['loss_eq_flow'], label="Equilibrium loss (test)", color='gray', linestyle='--')
 
     if 'generalization_error' in train_losses.keys():
         plt.plot(train_losses['epoch'], train_losses['generalization_error'], label="Train loss (generalization)",
@@ -120,7 +120,7 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
     # ax2.legend(loc = 1)
     fig.legend(loc = "upper right", bbox_to_anchor=(1,1), bbox_transform=ax.transAxes)
 
-    fig.show()
+    # fig.show()
 
 
 
