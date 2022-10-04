@@ -27,7 +27,7 @@ from src.aesuelogit.models import UtilityParameters, BPRParameters, ODParameters
 from src.aesuelogit.visualizations import plot_predictive_performance
 from src.aesuelogit.networks import load_k_shortest_paths, read_paths, build_fresno_network, \
     Equilibrator, sparsify_OD, ColumnGenerator, read_OD
-from src.aesuelogit.etl import get_design_tensor, get_y_tensor, data_curation
+from src.aesuelogit.etl import get_design_tensor, get_y_tensor, data_curation, temporal_split
 from src.aesuelogit.descriptive_statistics import mse, btcg_mse, mnrmse
 
 # Seed for reproducibility
@@ -51,11 +51,11 @@ read_OD(network=fresno_network, sparse=True)
 
 # Read paths
 # read_paths(network=fresno_network, update_incidence_matrices=True, filename='paths-fresno.csv')
-read_paths(network=fresno_network, update_incidence_matrices=True, filename = 'paths-full-model-fresno.csv')
+# read_paths(network=fresno_network, update_incidence_matrices=True, filename = 'paths-full-model-fresno.csv')
 
 # For quick testing (do not need to read_paths before)
-# Q = fresno_network.load_OD(sparsify_OD(fresno_network.Q, prop_od_pairs=0.99))
-# load_k_shortest_paths(network=fresno_network, k=2, update_incidence_matrices=True)
+Q = fresno_network.load_OD(sparsify_OD(fresno_network.Q, prop_od_pairs=0.99))
+load_k_shortest_paths(network=fresno_network, k=2, update_incidence_matrices=True)
 
 ## Read spatiotemporal data
 folderpath = isl.config.dirs['read_network_data'] + 'links/spatiotemporal-data/'
@@ -182,9 +182,10 @@ Y = Y[2019]
 # Prepare the training and validation dataset
 X, Y = tf.concat(X,axis = 0), tf.concat(Y,axis = 0)
 
-# TODO: split by weeks to comply with temporal ordering
+# Split to comply with temporal ordering
+X_train, X_test, Y_train, Y_test = temporal_split(X.numpy(), Y.numpy(), n_days = 20)
 
-X_train, X_test, Y_train, Y_test = train_test_split(X.numpy(), Y.numpy(), test_size=0.5, random_state=_SEED)
+# X_train, X_test, Y_train, Y_test = train_test_split(X.numpy(), Y.numpy(), test_size=0.5, random_state=_SEED)
 # X_train, X_test, Y_train, Y_test = X[2019], X[2020], Y[2019], Y[2020]
 
 X_train, X_test, Y_train, Y_test = [tf.constant(i) for i in [X_train, X_test, Y_train, Y_test]]
