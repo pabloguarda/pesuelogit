@@ -35,6 +35,22 @@ def convert_multiperiod_df_to_tensor(df, n_days, n_links, features, n_hours=1):
 
     return tf.constant(np.array(df[features]).reshape(n_days, n_hours, n_links, len(features)))
 
+def temporal_split(X,Y, n_days = None):
+
+    def splitter(A):
+        B = A[0:len(A) // 2]
+        C = A[len(A) // 2:]
+        return (B, C)
+
+    if n_days is None:
+        n_days = X.shape[0]
+
+    train_idxs, test_idxs = splitter(range(0, n_days))
+
+    X_train, X_test = X[train_idxs, :, :], X[test_idxs, :, :]
+    Y_train, Y_test = Y[train_idxs, :, :, :], Y[test_idxs, :, :, :]
+
+    return X_train, X_test, Y_train, Y_test
 
 def simulate_features_tensor(**kwargs):
     return convert_multiperiod_df_to_tensor(df=simulate_features(**kwargs),
