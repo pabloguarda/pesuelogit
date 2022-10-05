@@ -977,11 +977,6 @@ class GISUELOGIT(tf.keras.Model):
         # train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights)['loss_total']
         # val_loss = self.loss_function(X=X_val, Y=Y_val, loss_weights=loss_weights)['total']
 
-        loss_weights_eq = {k:0 for k, v in loss_weights.items()}
-        loss_weights_eq['eq_flow'] = 1
-        lr = optimizer.lr
-        lr_eq = 5e-1
-
         train_losses, val_losses = [], []
 
         estimates = []
@@ -1015,9 +1010,8 @@ class GISUELOGIT(tf.keras.Model):
                     # print(f"{relative_gap:0.2g}")
                     # print(sue_objective)
 
-
-
                 # print(f"{i}: loss={loss.numpy():0.4g}, theta = {model.theta.numpy()}")
+                # MSE is keep here regardless the selected loss metric so it is print the true loss
                 train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights, loss_metric=mse)
                 val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse)
 
