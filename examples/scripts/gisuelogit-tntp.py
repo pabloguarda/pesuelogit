@@ -18,11 +18,11 @@ import seaborn as sns
 from sklearn import preprocessing
 
 # Internal modules
-from src.aesuelogit.visualizations import plot_predictive_performance, plot_heatmap_demands, plot_convergence_estimates
-from src.aesuelogit.models import UtilityParameters, GISUELOGIT, AETSUELOGIT, NGD, BPRParameters, ODParameters
-from src.aesuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator, ColumnGenerator
-from src.aesuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data
-from src.aesuelogit.descriptive_statistics import mse, btcg_mse, mnrmse
+from src.gisuelogit.visualizations import plot_predictive_performance, plot_heatmap_demands, plot_convergence_estimates
+from src.gisuelogit.models import UtilityParameters, GISUELOGIT, AETSUELOGIT, NGD, BPRParameters, ODParameters
+from src.gisuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator, ColumnGenerator
+from src.gisuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data
+from src.gisuelogit.descriptive_statistics import mse, btcg_mse, mnrmse
 
 # Seed for reproducibility
 _SEED = 2022
@@ -186,7 +186,7 @@ if run_model['equilibrium']:
                                 xticks_spacing= 250)
 
 if run_model['lue']:
-    print('\n model 1: Benchmark of aesuelogit and isuelogit (utility only with link count and traveltime data)')
+    print('\n model 1: Benchmark of gisuelogit and isuelogit (utility only with link count and traveltime data)')
 
     # optimizer = NGD(learning_rate=_LR)
     # optimizer = tf.keras.optimizers.SGD(learning_rate=_LR)

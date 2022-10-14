@@ -14,12 +14,12 @@ import isuelogit as isl
 # from isuelogit.equilibrium import LUE_Equilibrator
 
 # from src.spad.ueae import StochasticNetworkLoading
-# from src.aesuelogit.aesue import simulate_features, build_tntp_network, simulate_suelogit_data, UtilityParameters, \
+# from src.gisuelogit.aesue import simulate_features, build_tntp_network, simulate_suelogit_data, UtilityParameters, \
 #     ODLUE, Equilibrator, get_design_tensor, get_y_tensor
 
-from src.aesuelogit.models import UtilityParameters, ODLUE, Equilibrator, NGD
-from src.aesuelogit.networks import build_tntp_network, build_small_network
-from src.aesuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data, simulate_features
+from src.gisuelogit.models import UtilityParameters, ODLUE, Equilibrator, NGD
+from src.gisuelogit.networks import build_tntp_network, build_small_network
+from src.gisuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data, simulate_features
 
 # Path management
 main_dir = str(Path(os.path.abspath('')).parents[0])

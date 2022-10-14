@@ -5,9 +5,9 @@ from pathlib import Path
 import isuelogit as isl
 import random
 
-from src.aesuelogit.models import UtilityParameters, NGD
-from src.aesuelogit.networks import build_tntp_network, Equilibrator, load_k_shortest_paths
-from src.aesuelogit.etl import simulate_features, simulate_suelogit_data, get_design_tensor, get_y_tensor
+from src.gisuelogit.models import UtilityParameters, NGD
+from src.gisuelogit.networks import build_tntp_network, Equilibrator, load_k_shortest_paths
+from src.gisuelogit.etl import simulate_features, simulate_suelogit_data, get_design_tensor, get_y_tensor
 
 # Seed for reproducibility
 _SEED = 2022
