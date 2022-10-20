@@ -7,6 +7,8 @@ from sklearn.model_selection import train_test_split
 from sklearn import preprocessing
 import matplotlib.pyplot as plt
 plt.ion()
+import seaborn as sns
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -24,11 +26,11 @@ isl.config.dirs['read_network_data'] = "input/network-data/fresno/"
 
 # Internal modules
 from src.gisuelogit.models import UtilityParameters, BPRParameters, ODParameters, GISUELOGIT, NGD
-from src.gisuelogit.visualizations import plot_predictive_performance
+from src.gisuelogit.visualizations import plot_predictive_performance, plot_convergence_estimates
 from src.gisuelogit.networks import load_k_shortest_paths, read_paths, build_fresno_network, \
     Equilibrator, sparsify_OD, ColumnGenerator, read_OD
 from src.gisuelogit.etl import get_design_tensor, get_y_tensor, data_curation, temporal_split
-from src.gisuelogit.descriptive_statistics import mse, btcg_mse, mnrmse
+from src.gisuelogit.descriptive_statistics import mse, btcg_mse, nrmse, mnrmse
 
 # Seed for reproducibility
 _SEED = 2022
@@ -61,10 +63,13 @@ load_k_shortest_paths(network=fresno_network, k=2, update_incidence_matrices=Tru
 folderpath = isl.config.dirs['read_network_data'] + 'links/spatiotemporal-data/'
 df = pd.concat([pd.read_csv(file) for file in glob.glob(folderpath + "*fresno-link-data*")], axis=0)
 
+# TODO: Check why there are missing dates, e.g. October 1, 2019
 df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
 df = df[df['date'].dt.dayofweek.between(0, 4)]
 # df = df[df['date'].dt.year == 2019]
 
+# df['date'].dt.dayofweek.unique()
+# len(sorted(df['date']).unique())
 df['period'] = df['date'].astype(str) + '-' + df['hour'].astype(str)
 df['period'] = df.period.map(hash)
 
@@ -157,6 +162,8 @@ for year in sorted(df['year'].unique()):
     tt_ff = get_design_tensor(Z=df_year[['tt_ff']], n_links=n_links, n_days=n_days, n_hours=n_hours)
 
 
+len(df.date.unique())
+
 # plt.hist(df_year['tt_avg'])
 #
 # bins = np.linspace(-10, 10, 100)
@@ -183,25 +190,23 @@ Y = Y[2019]
 X, Y = tf.concat(X,axis = 0), tf.concat(Y,axis = 0)
 
 # Split to comply with temporal ordering
-X_train, X_test, Y_train, Y_test = temporal_split(X.numpy(), Y.numpy(), n_days = 20)
+X_train, X_test, Y_train, Y_test = temporal_split(X.numpy(), Y.numpy(), n_days = X.shape[0])
 
 # X_train, X_test, Y_train, Y_test = train_test_split(X.numpy(), Y.numpy(), test_size=0.5, random_state=_SEED)
 # X_train, X_test, Y_train, Y_test = X[2019], X[2020], Y[2019], Y[2020]
 
 X_train, X_test, Y_train, Y_test = [tf.constant(i) for i in [X_train, X_test, Y_train, Y_test]]
 
-## Models
-
-# models = dict.fromkeys(['m0', 'm1', 'm2', 'm3', 'm4'], True)
-run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe-2', 'tvodlulpe'], False)
+#Models
+run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe-2', 'tvodlulpe'], True)
 
 # run_model.update(dict.fromkeys(['lue', 'odlue', 'odlulpe'], True))
 # run_model = dict.fromkeys( for i in ['lue', 'odlue', 'odlulpe'], True)
 # run_model['equilibrium'] = True
-run_model['lue'] = True
-run_model['odlue'] = True
-run_model['odlulpe-1'] = True
-run_model['odlulpe-2'] = True
+# run_model['lue'] = True
+# run_model['odlue'] = True
+# run_model['odlulpe-1'] = True
+# run_model['odlulpe-2'] = True
 
 train_results_dfs = {}
 test_results_dfs = {}
@@ -209,18 +214,20 @@ test_results_dfs = {}
 # TODO: It will be not included for IATBR abstract and maybe not in paper 2
 # run_model['tvodlulpe'] = True
 
-_EPOCHS = 500
+_EPOCHS = 40
 _BATCH_SIZE = 16
 _LR = 5e-1
 _RELATIVE_GAP = 1e-5
 _XTICKS_SPACING = 20
 _EPOCHS_PRINT_INTERVAL = 10
+_MOMENTUM_EQUILIBRIUM = 0.99
 
 # _LOSS_METRIC = mse
 # _LOSS_WEIGHTS ={'od': 1, 'theta': 0, 'tt': 1e10, 'flow': 1, 'eq_flow': 1}
 
 #_LOSS_METRIC  = btcg_mse
-_LOSS_METRIC  = mnrmse
+# _LOSS_METRIC  = mnrmse
+_LOSS_METRIC  = nrmse
 _LOSS_WEIGHTS ={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1}
 
 print(f"Relative gap threshold: {_RELATIVE_GAP}, "
@@ -300,7 +307,8 @@ if run_model['equilibrium']:
         # generalization_error={'train': False, 'validation': True},
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
-        loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'bpr': 0, 'eq_flow': 1},
+        loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'eq_flow': 1},
+        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs=_EPOCHS)
 
@@ -388,6 +396,7 @@ if run_model['ode']:
         loss_weights= dict(_LOSS_WEIGHTS, od = 0),
         # loss_weights=dict(_LOSS_WEIGHTS, **{'tt': 0, 'od': 0}),
         loss_metric=_LOSS_METRIC,
+        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
@@ -475,8 +484,10 @@ if run_model['lue']:
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
         # loss_weights={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1},
-        loss_weights={'od': 0, 'theta': 0, 'tt': 1e10, 'flow': 1, 'eq_flow': 1},
+        # loss_weights={'od': 0, 'theta': 0, 'tt': 1e10, 'flow': 1, 'eq_flow': 1},
+        loss_weights=dict(_LOSS_WEIGHTS, od=0),
         loss_metric=_LOSS_METRIC,
+        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
@@ -552,6 +563,7 @@ if run_model['odlue']:
         # generalization_error={'train': False, 'validation': True},
         loss_weights= _LOSS_WEIGHTS,
         loss_metric=_LOSS_METRIC,
+        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
@@ -649,6 +661,7 @@ if run_model['odlulpe-1']:
         batch_size=_BATCH_SIZE,
         # loss_weights={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1},
         loss_weights=_LOSS_WEIGHTS,
+        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         loss_metric=_LOSS_METRIC,
@@ -656,6 +669,15 @@ if run_model['odlulpe-1']:
 
     plot_predictive_performance(train_losses=train_results_dfs['odlulpe-1'], val_losses=test_results_dfs['odlulpe-1'],
                                 xticks_spacing = _XTICKS_SPACING)
+
+    plot_convergence_estimates(estimates=train_results_dfs['odlulpe-1'][['epoch','alpha']],
+                               true_values=odlulpe_1.bpr.true_values)
+
+    sns.displot(pd.DataFrame({'alpha':odlulpe_1.alpha}),
+            x="alpha", multiple="stack", kind="kde", alpha = 0.8)
+
+    sns.displot(pd.DataFrame({'fixed_effect':np.array(odlulpe_1.fixed_effect)}),
+                x="fixed_effect", multiple="stack", kind="kde", alpha = 0.8)
 
     print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlulpe_1.theta.numpy())))}")
     print(f"alpha = {np.mean(odlulpe_1.alpha): 0.2f}, beta  = {np.mean(odlulpe_1.beta): 0.2f}")
@@ -727,7 +749,7 @@ if run_model['odlulpe-2']:
                                        )
 
     odlulpe_2 = GISUELOGIT(
-        key='odlulpe_2',
+        key='odlulpe-2',
         network=fresno_network,
         dtype=tf.float64,
         equilibrator=equilibrator,
@@ -737,20 +759,32 @@ if run_model['odlulpe-2']:
         od=od_parameters,
     )
 
-    train_results_dfs['odlulpe_2'], test_results_dfs['odlulpe_2'] = odlulpe_2.train(
+    train_results_dfs['odlulpe-2'], test_results_dfs['odlulpe-2'] = odlulpe_2.train(
         X_train, Y_train, X_test, Y_test,
         optimizer=optimizer,
         # generalization_error={'train': False, 'validation': True},
         batch_size=_BATCH_SIZE,
         # loss_weights={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1},
         loss_weights= _LOSS_WEIGHTS,
+        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         loss_metric=_LOSS_METRIC,
         epochs=_EPOCHS)
 
-    plot_predictive_performance(train_losses=train_results_dfs['odlulpe_2'], val_losses=test_results_dfs['odlulpe_2'],
+    plot_predictive_performance(train_losses=train_results_dfs['odlulpe-2'], val_losses=test_results_dfs['odlulpe-2'],
                                 xticks_spacing = _XTICKS_SPACING)
+
+    plot_convergence_estimates(estimates=train_results_dfs['odlulpe-2'][['epoch','alpha','beta']],
+                                xticks_spacing = _XTICKS_SPACING)
+
+    sns.displot(pd.melt(pd.DataFrame({'alpha':odlulpe_2.alpha, 'beta': odlulpe_2.beta}), var_name = 'parameters'),
+                x="value", hue="parameters", multiple="stack", kind="kde", alpha = 0.8)
+
+    sns.displot(pd.DataFrame({'fixed_effect':np.array(odlulpe_2.fixed_effect)}),
+                x="fixed_effect", multiple="stack", kind="kde", alpha = 0.8)
+
+    plt.show()
 
     print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlulpe_2.theta.numpy())))}")
     print(f"alpha = {np.mean(odlulpe_2.alpha): 0.2f}, beta  = {np.mean(odlulpe_2.beta): 0.2f}")
@@ -800,6 +834,7 @@ if run_model['tvodlulpe']:
         batch_size=_BATCH_SIZE,
         loss_weights= _LOSS_WEIGHTS,
         loss_metric=_LOSS_METRIC,
+        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs=_EPOCHS)
 
@@ -811,3 +846,12 @@ if run_model['tvodlulpe']:
     print(f"theta = {'tvodlulpe'.theta.numpy()}")
     print(f"alpha = {'tvodlulpe'.alpha: 0.2f}, beta  = {'tvodlulpe'.beta: 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs('tvodlulpe'.q - fresno_network.q.flatten())): 0.2f}")
+
+## Write csv file with estimation results
+
+train_results_df, val_results_df \
+    = map(lambda x: pd.concat([results.assign(model = model)[['model'] + list(results.columns)]
+                               for model, results in x.items()],axis = 0), [train_results_dfs, test_results_dfs])
+
+train_results_df.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')}_train_results_{'Fresno'}.csv")
+val_results_df.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')}_validation_results_{'Fresno'}.csv")

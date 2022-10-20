@@ -930,6 +930,7 @@ class GISUELOGIT(tf.keras.Model):
               loss_weights: Dict[str, float],
               threshold_relative_gap: float = 1e-4,
               loss_metric=None,
+              momentum_equilibrium = 1,
               generalization_error: Dict[str, bool] = None,
               epochs=1,
               epochs_print_interval:int = 1,
@@ -1022,7 +1023,7 @@ class GISUELOGIT(tf.keras.Model):
             if epoch == epochs or abs(relative_gaps[-1]) < threshold_relative_gap:
                 terminate_algorithm = True
 
-            if epoch % epochs_print_interval == 0 or terminate_algorithm:
+            if epoch % epochs_print_interval == 0 or epoch == 1 or terminate_algorithm:
 
                 print(f"\nEpoch: {epoch}, n_train: {X_train.shape[0]}, n_test: {X_val.shape[0]}")
 
@@ -1041,6 +1042,7 @@ class GISUELOGIT(tf.keras.Model):
                     f"avg alpha={np.mean(self.alpha.numpy()):0.2g}, avg beta={np.mean(self.beta.numpy()):0.2g}, "
                     # f"avg abs diff demand ={np.nanmean(np.abs(self.q - self.historic_od(self.q))):0.2g}, ",end = '')
                     f"loss demand={float(train_losses[-1]['loss_od'].numpy()):0.2g}, "
+                      f"lambda eq={loss_weights['eq_flow']:0.2g}, "
                       f"relative x={relative_x:0.2g}, "
                       f"relative gap={relative_gaps[-1]:0.2g}, ", end='')
 
@@ -1055,7 +1057,7 @@ class GISUELOGIT(tf.keras.Model):
                 if generalization_error.get('validation', False):
                     print(f"val generalization error ={val_losses[-1]['generalization_error'].numpy():0.2g}, ", end = '')
 
-                print(f"time: {time.time() - t0: 0.1f}")
+                print(f"time:{time.time() - t0: 0.1f}")
 
                 t0 = time.time()
 
@@ -1063,7 +1065,7 @@ class GISUELOGIT(tf.keras.Model):
 
                 # Gradient based learning
 
-                current_loss_weights = loss_weights
+                # current_loss_weights = loss_weights
 
                 # if relative_gap >= 1e-1:
                 #     current_loss_weights = loss_weights_eq
@@ -1074,11 +1076,13 @@ class GISUELOGIT(tf.keras.Model):
                 #     self._theta.trainable = True
                 #     optimizer.lr = lr
 
+                loss_weights['eq_flow'] = loss_weights['eq_flow'] / momentum_equilibrium
+
                 for step, (X_batch_train, Y_batch_train) in enumerate(train_dataset):
 
                     with tf.GradientTape() as tape:
                         train_loss = \
-                            self.loss_function(X=X_batch_train, Y=Y_batch_train, lambdas=current_loss_weights,
+                            self.loss_function(X=X_batch_train, Y=Y_batch_train, lambdas=loss_weights,
                                                loss_metric=loss_metric)['loss_total']
 
 
@@ -1087,7 +1091,7 @@ class GISUELOGIT(tf.keras.Model):
                     # # Apply some clipping (tf.linalg.normada
                     # grads = [tf.clip_by_norm(g, 2) for g in grads]
 
-                    # # The normalization of gradient of NGD can be hardcoded as
+                    # # The normalization of gradients in NGD can be hardcoded as
                     # if isinstance(optimizer, NGD):
                     #     grads = [g/tf.linalg.norm(g, 2) for g in grads]
 

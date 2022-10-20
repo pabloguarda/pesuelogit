@@ -92,6 +92,7 @@ _RELATIVE_GAP = 1e-7
 # To reduce variability in estimates of experiments, it is better to not use batches
 # _BATCH_SIZE = None
 _BATCH_SIZE = 16
+_MOMENTUM_EQUILIBRIUM = 0.99
 
 # loss_metric = mnrmse
 _LOSS_METRIC = mse
@@ -107,11 +108,11 @@ list_models = ['equilibrium', 'lue', 'ode', 'lpe', 'odlue', 'odlulpe']
 run_model = dict.fromkeys(list_models, False)
 
 # run_model['equilibrium'] = True
-# run_model['lue'] = True
+run_model['lue'] = True
 # run_model['ode'] = True
 # run_model['lpe'] = True
 # run_model['odlue'] = True
-run_model['odlulpe'] = True
+# run_model['odlulpe'] = True
 
 train_results_dfs = {}
 val_results_dfs = {}
@@ -225,7 +226,7 @@ if run_model['lue']:
                                            )
 
     # utility_parameters.random_initializer((-1,1),['tt','c','s'])
-    # utility_parameters.random_initializer((0, 0), ['tt', 'c', 's'])
+    utility_parameters.random_initializer((0, 0), ['tt', 'c', 's'])
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
                                    initial_values={'alpha': 0.15, 'beta': 4},
@@ -275,6 +276,7 @@ if run_model['lue']:
         batch_size=_BATCH_SIZE,
         loss_metric=_LOSS_METRIC,
         loss_weights={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1},
+        momentum_equilibrium = _MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
@@ -365,6 +367,7 @@ if run_model['ode']:
         loss_metric=_LOSS_METRIC,
         # generalization_error={'train': False, 'validation': True},
         loss_weights=dict(_LOSS_WEIGHTS, od=1),
+        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
@@ -451,6 +454,7 @@ if run_model['lpe']:
         # loss_metric=mnrmse,
         # generalization_error={'train': False, 'validation': True},
         loss_weights= dict(_LOSS_WEIGHTS, od = 1, flow = 0, tt = 1e6),
+        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
@@ -545,6 +549,7 @@ if run_model['odlue']:
         # generalization_error={'train': False, 'validation': True},
         # loss_weights={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1},
         loss_weights=dict(_LOSS_WEIGHTS),
+        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
@@ -648,6 +653,7 @@ if run_model['odlulpe']:
         batch_size=_BATCH_SIZE,
         loss_weights=_LOSS_WEIGHTS,
         loss_metric=_LOSS_METRIC,
+        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
