@@ -1078,6 +1078,9 @@ class GISUELOGIT(tf.keras.Model):
 
                 loss_weights['eq_flow'] = loss_weights['eq_flow'] / momentum_equilibrium
 
+                # Normalize weights to one
+                loss_weights = {k:(v/np.sum(list(loss_weights.values()))) for k,v in loss_weights.items()}
+
                 for step, (X_batch_train, Y_batch_train) in enumerate(train_dataset):
 
                     with tf.GradientTape() as tape:
