@@ -16,6 +16,7 @@ import tensorflow as tf
 import isuelogit as isl
 import seaborn as sns
 from sklearn import preprocessing
+from datetime import datetime
 
 # Internal modules
 from src.gisuelogit.visualizations import plot_predictive_performance, plot_heatmap_demands, plot_convergence_estimates
@@ -85,28 +86,32 @@ X_train, X_test, Y_train, Y_test = train_test_split(X.numpy(), Y.numpy(), test_s
 
 X_train, X_test, Y_train, Y_test = [tf.constant(i) for i in [X_train, X_test, Y_train, Y_test]]
 
-_EPOCHS = 2000
+_EPOCHS = 1000
 _LR = 1e-1
 _RELATIVE_GAP = 1e-7
 # To reduce variability in estimates of experiments, it is better to not use batches
-_BATCH_SIZE = None
+# _BATCH_SIZE = None
+_BATCH_SIZE = 16
 
 # loss_metric = mnrmse
-loss_metric = mse
+_LOSS_METRIC = mse
 
-_EPOCHS_PRINT_INTERVAL = 50
+_EPOCHS_PRINT_INTERVAL = 10
+
+_LOSS_WEIGHTS ={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1}
 
 # Models
-list_models = ['equilibrium','lue', 'ode', 'odlue', 'odlulpe']
+list_models = ['equilibrium', 'lue', 'ode', 'lpe', 'odlue', 'odlulpe']
 
-run_model = dict.fromkeys(list_models,True)
-# run_model = dict.fromkeys(list_models, False)
+# run_model = dict.fromkeys(list_models,True)
+run_model = dict.fromkeys(list_models, False)
 
 # run_model['equilibrium'] = True
 # run_model['lue'] = True
 # run_model['ode'] = True
+# run_model['lpe'] = True
 # run_model['odlue'] = True
-# run_model['odlulpe'] = True
+run_model['odlulpe'] = True
 
 train_results_dfs = {}
 val_results_dfs = {}
@@ -174,7 +179,7 @@ if run_model['equilibrium']:
         X_train, Y_train, X_test, Y_test,
         # generalization_error={'train': False, 'validation': True},
         # loss_metric = mse,
-        loss_metric=loss_metric,
+        loss_metric=_LOSS_METRIC,
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
         loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'eq_flow': 1},
@@ -182,8 +187,20 @@ if run_model['equilibrium']:
         epochs_print_interval = _EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
 
+    train_results_estimates, train_results_losses = suelogit.split_results(results=train_results_dfs['suelogit'])
+    val_results_estimates, val_results_losses = suelogit.split_results(results=val_results_dfs['suelogit'])
+
     plot_predictive_performance(train_losses=train_results_dfs['suelogit'], val_losses=val_results_dfs['suelogit'],
                                 xticks_spacing= 250)
+
+    fig, ax = plot_convergence_estimates(
+        estimates=train_results_losses.drop([0]).assign(
+            relative_gap = np.abs(train_results_losses['relative_gap']))[['epoch','relative_gap']])
+
+    ax.set_yscale('log')
+    ax.set_ylabel('relative gap (log scale)')
+
+    plt.show()
 
 if run_model['lue']:
     print('\n model 1: Benchmark of gisuelogit and isuelogit (utility only with link count and traveltime data)')
@@ -256,14 +273,24 @@ if run_model['lue']:
         # generalization_error={'train': False, 'validation': True},
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
-        loss_metric=loss_metric,
+        loss_metric=_LOSS_METRIC,
         loss_weights={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1},
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
 
-    plot_predictive_performance(train_losses=train_results_dfs['lue'], val_losses=val_results_dfs['lue'],
-                                xticks_spacing= 250)
+    train_results_estimates, train_results_losses = lue.split_results(results=train_results_dfs['lue'])
+    val_results_estimates, val_results_losses = lue.split_results(results=val_results_dfs['lue'])
+
+    plot_predictive_performance(train_losses=train_results_losses, val_losses=val_results_losses,
+                                xticks_spacing=250)
+
+    plt.show()
+
+    plot_convergence_estimates(estimates=train_results_estimates.\
+                               assign(vot = train_results_estimates['tt']/train_results_estimates['c'])[['epoch','vot']],
+                               true_values={'vot':lue.utility.true_values['tt']/lue.utility.true_values['c']})
+    plt.show()
 
     print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(lue.theta.numpy())))}")
     print(f"alpha = {lue.alpha: 0.2f}, beta  = {lue.beta: 0.2f}")
@@ -335,9 +362,9 @@ if run_model['ode']:
         X_train, Y_train, X_test, Y_test,
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
-        loss_metric=loss_metric,
+        loss_metric=_LOSS_METRIC,
         # generalization_error={'train': False, 'validation': True},
-        loss_weights={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1},
+        loss_weights=dict(_LOSS_WEIGHTS, od=1),
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
@@ -356,6 +383,99 @@ if run_model['ode']:
     print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(ode.theta.numpy())))}")
     print(f"alpha = {ode.alpha: 0.2f}, beta  = {ode.beta: 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(ode.q - tntp_network.q.flatten())): 0.2f}")
+
+if run_model['lpe']:
+    print('\nLPE: link performance estimation')
+
+    _RELATIVE_GAP = 1e-9
+
+    # optimizer = tf.keras.optimizers.Adagrad(learning_rate=_LR)
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
+
+    utility_parameters = UtilityParameters(features_Y=['tt'],
+                                           features_Z=features_Z,
+                                           periods=1,
+                                           initial_values={'tt': -1, 'c': -6, 's': -3, 'psc_factor': 0,
+                                                           'fixed_effect': np.zeros_like(tntp_network.links)},
+                                           trainables={'psc_factor': False, 'fixed_effect': False
+                                               , 'tt': False, 'c': False, 's': False},
+                                           )
+
+    # utility_parameters.random_initializer((-1,1),['tt','c','s'])
+
+    bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
+                                   initial_values={'alpha': 0.15, 'beta': 4},
+                                   true_values={'alpha': 0.15, 'beta': 4},
+                                   trainables=dict.fromkeys(['alpha', 'beta'], True),
+                                   # trainables={'alpha': False, 'beta': True}
+                                   )
+
+    Q_historic = isl.factory.random_disturbance_Q(tntp_network.Q, sd=np.mean(tntp_network.Q) * 0.1).copy()
+    # Q_historic = tntp_network.Q.copy()
+
+    od_parameters = ODParameters(key='od',
+                                 periods=1,
+                                 # initial_values=tntp_network.q.flatten(),
+                                 initial_values= isl.networks.denseQ(Q_historic).flatten(),
+                                 # initial_values=np.ones_like(tntp_network.q.flatten()),
+                                 historic_values={1: isl.networks.denseQ(Q_historic).flatten()},
+                                 # historic_values={1: tntp_network.q.flatten()},
+                                 trainable=False)
+
+    equilibrator = Equilibrator(
+        network=tntp_network,
+        # paths_generator=paths_generator,
+        utility=utility_parameters,
+        max_iters=100,
+        method='fw',
+        iters_fw=50,
+        accuracy=1e-4,
+    )
+
+    lpe = GISUELOGIT(
+        key='lpe',
+        network=tntp_network,
+        dtype=tf.float64,
+        equilibrator=equilibrator,
+        utility=utility_parameters,
+        bpr=bpr_parameters,
+        od=od_parameters,
+    )
+
+    train_results_dfs['lpe'], val_results_dfs['lpe'] = lpe.train(
+        X_train, Y_train, X_test, Y_test,
+        optimizer=optimizer,
+        batch_size=_BATCH_SIZE,
+        loss_metric=_LOSS_METRIC,
+        # loss_metric=mnrmse,
+        # generalization_error={'train': False, 'validation': True},
+        loss_weights= dict(_LOSS_WEIGHTS, od = 1, flow = 0, tt = 1e6),
+        threshold_relative_gap=_RELATIVE_GAP,
+        epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
+        epochs=_EPOCHS)
+
+    train_results_estimates, train_results_losses = lpe.split_results(results=train_results_dfs['lpe'])
+    val_results_estimates, val_results_losses = lpe.split_results(results=val_results_dfs['lpe'])
+
+    plot_predictive_performance(train_losses=train_results_losses, val_losses=val_results_dfs['lpe'],
+                                xticks_spacing=250)
+    plt.show()
+
+    plot_convergence_estimates(estimates=train_results_estimates[['epoch', 'alpha', 'beta']],
+                               true_values=lpe.bpr.true_values)
+    plt.show()
+
+    Qs = {'true': tntp_network.OD.Q_true, 'historic': Q_historic, 'estimated': tf.sparse.to_dense(lpe.Q).numpy()}
+
+    plot_heatmap_demands(Qs=Qs, vmin=np.min(Qs['true']), vmax=np.max(Qs['true']), subplots_dims=(1, 3), figsize=(12, 4))
+
+    plt.show()
+
+    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(lpe.theta.numpy())))}, "
+          f"vot = {train_results_estimates.eval('tt/c').values[-1]:0.2f}")
+    print(f"alpha = {lpe.alpha: 0.2f}, beta  = {lpe.beta: 0.2f}")
+    print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(lpe.q - tntp_network.q.flatten())): 0.2f}")
 
 if run_model['odlue']:
     print('\nODLUE: OD + utility estimation with historic OD')
@@ -381,6 +501,7 @@ if run_model['odlue']:
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
                                    initial_values={'alpha': 0.15, 'beta': 4},
+                                   true_values={'alpha': 0.15, 'beta': 4},
                                    trainables=dict.fromkeys(['alpha', 'beta'], False),
                                    )
 
@@ -419,17 +540,30 @@ if run_model['odlue']:
         X_train, Y_train, X_test, Y_test,
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
-        loss_metric=loss_metric,
+        loss_metric=_LOSS_METRIC,
         # loss_metric=mse,
         # generalization_error={'train': False, 'validation': True},
-        loss_weights={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1},
+        # loss_weights={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1},
+        loss_weights=dict(_LOSS_WEIGHTS),
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
 
-    plot_predictive_performance(train_losses=train_results_dfs['odlue'], val_losses=val_results_dfs['odlue'],
-                                xticks_spacing= 250)
+    
+    train_results_estimates, train_results_losses = odlue.split_results(results=train_results_dfs['odlue'])
+    val_results_estimates, val_results_losses = odlue.split_results(results=val_results_dfs['odlue'])
 
+    plot_predictive_performance(train_losses= train_results_losses, val_losses=val_results_dfs['odlue'],
+                                xticks_spacing = 250)
+    plt.show()
+
+    plot_convergence_estimates(estimates=train_results_estimates.\
+                               assign(vot = train_results_estimates['tt']/train_results_estimates['c'])[['epoch','vot']],
+                               true_values={'vot':lue.utility.true_values['tt']/lue.utility.true_values['c']})
+    plt.show()
+
+    plot_convergence_estimates(estimates=train_results_estimates[['epoch','alpha','beta']],
+                               true_values=odlue.bpr.true_values)
     plt.show()
 
     Qs = {'true': tntp_network.OD.Q_true, 'historic': Q_historic, 'estimated': tf.sparse.to_dense(odlue.Q).numpy()}
@@ -438,7 +572,8 @@ if run_model['odlue']:
 
     plt.show()
 
-    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlue.theta.numpy())))}")
+    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlue.theta.numpy())))}, "
+          f"vot = {train_results_estimates.eval('tt/c').values[-1]:0.2f}")
     print(f"alpha = {odlue.alpha: 0.2f}, beta  = {odlue.beta: 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(odlue.q - tntp_network.q.flatten())): 0.2f}")
     
@@ -450,10 +585,10 @@ if run_model['odlulpe']:
     optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
-                                   initial_values={'alpha': 0.15, 'beta': 4},
-                                   # initial_values={'alpha': 1, 'beta': 1},
-                                   # initial_values={'alpha': np.ones_like(tntp_network.links, dtype=np.float32),
-                                   #                 'beta': 4 * np.ones_like(tntp_network.links, dtype=np.float32)},
+                                   # initial_values={'alpha': 0.15, 'beta': 4},
+                                   # initial_values={'alpha': 1, 'beta': 2},
+                                   initial_values={'alpha': np.ones_like(tntp_network.links, dtype=np.float32),
+                                                   'beta': 1 * np.ones_like(tntp_network.links, dtype=np.float32)},
                                    true_values={'alpha': 0.15, 'beta': 4},
                                    # initial_values={'alpha': 0.15, 'beta': 4},
                                    trainables={'alpha': True, 'beta':True},
@@ -480,7 +615,7 @@ if run_model['odlulpe']:
                                                            'fixed_effect': np.zeros_like(tntp_network.links)},
                                            true_values={'tt': -1, 'c': -6, 's': -3},
                                            # signs={'tt': '-', 'c': '-', 's': '-'},
-                                           trainables={'psc_factor': False, 'fixed_effect': False
+                                           trainables={'psc_factor': False, 'fixed_effect': True
                                                , 'tt': True, 'c': True, 's': True},
                                            )
 
@@ -511,16 +646,30 @@ if run_model['odlulpe']:
         optimizer=optimizer,
         # generalization_error={'train': False, 'validation': True},
         batch_size=_BATCH_SIZE,
-        loss_weights={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1},
-        loss_metric=loss_metric,
+        loss_weights=_LOSS_WEIGHTS,
+        loss_metric=_LOSS_METRIC,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
 
-    plot_predictive_performance(train_losses=train_results_dfs['odlulpe'], val_losses=val_results_dfs['odlulpe'],
+    train_results_estimates, train_results_losses = odlulpe.split_results(results=train_results_dfs['odlulpe'])
+    val_results_estimates, val_results_losses = odlulpe.split_results(results=val_results_dfs['odlulpe'])
+
+    plot_predictive_performance(train_losses= train_results_losses, val_losses=val_results_dfs['odlulpe'],
                                 xticks_spacing = 250)
 
-    plt.show()
+    plot_convergence_estimates(estimates=train_results_estimates.\
+                               assign(vot = train_results_estimates['tt']/train_results_estimates['c'])[['epoch','vot']],
+                               true_values={'vot':odlulpe.utility.true_values['tt']/odlulpe.utility.true_values['c']})
+
+    plot_convergence_estimates(estimates=train_results_estimates[['epoch','alpha','beta']],
+                               true_values=odlulpe.bpr.true_values)
+
+    sns.displot(pd.melt(pd.DataFrame({'alpha':odlulpe.alpha, 'beta': odlulpe.beta}), var_name = 'parameters'),
+                x="value", hue="parameters", multiple="stack", kind="kde", alpha = 0.8)
+
+    sns.displot(pd.DataFrame({'fixed_effect':np.array(odlulpe.fixed_effect)}),
+                x="fixed_effect", multiple="stack", kind="kde", alpha = 0.8)
 
     Qs = {'true': tntp_network.OD.Q_true, 'historic': Q_historic, 'estimated': tf.sparse.to_dense(odlulpe.Q).numpy()}
 
@@ -528,10 +677,21 @@ if run_model['odlulpe']:
 
     plt.show()
 
-    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlulpe.theta.numpy())))}")
+    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlulpe.theta.numpy())))}, "
+          f"vot = {train_results_estimates.eval('tt/c').values[-1]:0.2f}")
     print(f"alpha = {np.mean(odlulpe.alpha): 0.2f}, beta  = {np.mean(odlulpe.beta): 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(odlulpe.q - tntp_network.q.flatten())): 0.2f}")
 
+
+# Write csv file with estimation results
+train_results_df, val_results_df \
+    = map(lambda x: pd.concat([results.assign(model = model)[['model'] + list(results.columns)]
+                               for model, results in x.items()],axis = 0), [train_results_dfs, val_results_dfs])
+
+train_results_df.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')}_train_results_{network_name}.csv")
+val_results_df.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')}_validation_results_{network_name}.csv")
+
+os.getcwd()
 
 ## Plot of convergence toward true vot across models
 

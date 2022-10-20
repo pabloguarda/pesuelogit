@@ -622,13 +622,13 @@ class GISUELOGIT(tf.keras.Model):
 
         # return tf.clip_by_value(self._alpha, self._epsilon, 1e10)
         # return tf.exp(self._alpha)
-        return tf.clip_by_value(tf.exp(self._alpha), 0, 1)
+        return tf.clip_by_value(tf.exp(self._alpha), 0, 2)
         # return tf.clip_by_value(tf.math.pow(self._alpha,2),0,1e10)
 
     @property
     def beta(self):
         # return tf.clip_by_value(self._beta, self._epsilon, 10)
-        return tf.clip_by_value(tf.exp(self._beta),1,5)
+        return tf.clip_by_value(tf.exp(self._beta),0,8)
         # return tf.clip_by_value(self._beta, 1, 5)
         # return tf.exp(self._beta)
 
@@ -795,17 +795,17 @@ class GISUELOGIT(tf.keras.Model):
         if Y.shape[-1] > 0:
             self.observed_traveltimes, self.observed_flows = tf.unstack(Y,axis = -1)
 
-            k = np.array([link.bpr.k for link in self.network.links])
-            self.observed_traveltimes = self.mask_observed_traveltimes(tt = self.observed_traveltimes, k = k)
+            self.observed_traveltimes = self.mask_observed_traveltimes(tt = self.observed_traveltimes,
+                                                                       k = np.array([link.bpr.k for link in self.network.links]))
 
             # Under recurrent traffic conditions, we assume that the equilibrium flow and travel time is the same regardless the day  Thus, using self.flows() or self.traveltimes() is preferred.
-            predicted_flow = self.compute_link_flows(X)
-            predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
-            output_flow = predicted_flow
+            # predicted_flow = self.compute_link_flows(X)
+            # predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
+            # output_flow = predicted_flow
 
-            # predicted_flow = self.flows()
-            # predicted_traveltimes = self.traveltimes()
-            # output_flow = self.compute_link_flows(X)
+            predicted_flow = self.flows()
+            predicted_traveltimes = self.traveltimes()
+            output_flow = self.compute_link_flows(X)
 
             # np.nanmean(self.observed_traveltimes)
             # np.nanmean(predicted_traveltimes)
@@ -903,7 +903,7 @@ class GISUELOGIT(tf.keras.Model):
 
         true_values = {k: v for k, v in {**self.bpr.true_values, **self.utility.true_values}.items()}
 
-        if set(['c', 'tt']).issubset(true_values.keys()):
+        if {'c', 'tt'}.issubset(true_values.keys()):
             true_values['vot'] = compute_vot(true_values)
 
         return pd.DataFrame({'parameter': true_values.keys(), 'truth': true_values.values()})
@@ -913,7 +913,7 @@ class GISUELOGIT(tf.keras.Model):
 
     def split_results(self, results: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
-        col_losses = ['epoch'] + [col for col in results.columns if any(x in col for x in ['loss_', 'error'])]
+        col_losses = ['epoch'] + [col for col in results.columns if any(x in col for x in ['loss_', 'error', 'relative_gap'])]
 
         results_losses = results[col_losses]
 
@@ -979,9 +979,13 @@ class GISUELOGIT(tf.keras.Model):
 
         train_losses, val_losses = [], []
 
-        estimates = []
+        estimates = [self.get_parameters_estimates()]
 
-        relative_gap = 1e10
+        # MSE is keep here regardless the selected loss metric so it is printed the true loss
+        train_losses = [self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights, loss_metric=mse)]
+        val_losses = [self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse)]
+
+        relative_gaps = [threshold_relative_gap]
         terminate_algorithm = False
 
         sue_objectives = []
@@ -989,8 +993,6 @@ class GISUELOGIT(tf.keras.Model):
         while not terminate_algorithm:
 
             if not terminate_algorithm:
-
-                estimates.append(self.get_parameters_estimates())
 
                 path_flows = self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X_train))))
                 link_flow = self.link_flows(path_flows)
@@ -1006,36 +1008,30 @@ class GISUELOGIT(tf.keras.Model):
                 sue_objectives.append(sue_objective)
 
                 if len(sue_objectives)>=2:
-                    relative_gap = (sue_objectives[-1] / sue_objectives[-2] - 1)
+                    relative_gaps.append((sue_objectives[-1] / sue_objectives[-2] - 1))
                     # print(f"{relative_gap:0.2g}")
                     # print(sue_objective)
 
                 # print(f"{i}: loss={loss.numpy():0.4g}, theta = {model.theta.numpy()}")
-                # MSE is keep here regardless the selected loss metric so it is print the true loss
-                train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights, loss_metric=mse)
-                val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse)
 
                 if generalization_error.get('train', False):
-                    train_loss['generalization_error'] = self.generalization_error(X=X_train, Y=Y_train)
+                    train_losses[-1]['generalization_error'] = self.generalization_error(X=X_train, Y=Y_train)
                 if generalization_error.get('validation', False):
-                    val_loss['generalization_error'] = self.generalization_error(X=X_val, Y=Y_val)
+                    val_losses[-1]['generalization_error'] = self.generalization_error(X=X_val, Y=Y_val)
 
-                train_losses.append(train_loss)
-                val_losses.append(val_loss)
-
-            if epoch > epochs or abs(relative_gap) < threshold_relative_gap:
+            if epoch == epochs or abs(relative_gaps[-1]) < threshold_relative_gap:
                 terminate_algorithm = True
 
             if epoch % epochs_print_interval == 0 or terminate_algorithm:
 
                 print(f"\nEpoch: {epoch}, n_train: {X_train.shape[0]}, n_test: {X_val.shape[0]}")
 
-                print(f"\n{epoch}: train_loss={float(train_loss['loss_total'].numpy()):0.2g}, "
-                    f"val_loss={float(val_loss['loss_total'].numpy()):0.2g}, "
-                    f"train_loss tt={float(train_loss['loss_tt'].numpy()):0.2g}, "
-                    f"val_loss tt={float(val_loss['loss_tt'].numpy()):0.2g}, "
-                    f"train_loss flow={float(train_loss['loss_flow'].numpy()):0.2g}, "
-                    f"val_loss flow={float(val_loss['loss_flow'].numpy()):0.2g}, "
+                print(f"\n{epoch}: train_loss={float(train_losses[-1]['loss_total'].numpy()):0.2g}, "
+                    f"val_loss={float(val_losses[-1]['loss_total'].numpy()):0.2g}, "
+                    f"train_loss tt={float(train_losses[-1]['loss_tt'].numpy()):0.2g}, "
+                    f"val_loss tt={float(val_losses[-1]['loss_tt'].numpy()):0.2g}, "
+                    f"train_loss flow={float(train_losses[-1]['loss_flow'].numpy()):0.2g}, "
+                    f"val_loss flow={float(val_losses[-1]['loss_flow'].numpy()):0.2g}, "
                     # f"train_loss bpr={float(train_loss['loss_bpr'].numpy()):0.2g}, "
                     # f"val_loss bpr={float(val_loss['loss_bpr'].numpy()):0.2g}, "
                     f"theta = {self.theta.numpy()}, "
@@ -1044,20 +1040,20 @@ class GISUELOGIT(tf.keras.Model):
                     f"avg abs theta fixed effect = {np.mean(np.abs(self.fixed_effect)):0.2g}, "
                     f"avg alpha={np.mean(self.alpha.numpy()):0.2g}, avg beta={np.mean(self.beta.numpy()):0.2g}, "
                     # f"avg abs diff demand ={np.nanmean(np.abs(self.q - self.historic_od(self.q))):0.2g}, ",end = '')
-                    f"loss demand={float(train_loss['loss_od'].numpy()):0.2g}, "
+                    f"loss demand={float(train_losses[-1]['loss_od'].numpy()):0.2g}, "
                       f"relative x={relative_x:0.2g}, "
-                      f"relative gap={relative_gap:0.2g}, ", end='')
+                      f"relative gap={relative_gaps[-1]:0.2g}, ", end='')
 
-                if train_loss.get('loss_eq_tt', False):
-                    print(f"train tt equilibrium loss={float(train_loss['loss_eq_tt'].numpy()):0.2g}, ", end = '')
+                if train_losses[-1].get('loss_eq_tt', False):
+                    print(f"train tt equilibrium loss={float(train_losses[-1]['loss_eq_tt'].numpy()):0.2g}, ", end = '')
 
-                if train_loss.get('loss_eq_flow', False):
-                    print(f"train flow equilibrium loss={float(train_loss['loss_eq_flow'].numpy()):0.2g}, ", end = '')
+                if train_losses[-1].get('loss_eq_flow', False):
+                    print(f"train flow equilibrium loss={float(train_losses[-1]['loss_eq_flow'].numpy()):0.2g}, ", end = '')
 
                 if generalization_error.get('train', False):
-                    print(f"train generalization error ={train_loss['generalization_error'].numpy():0.2g}, ", end = '')
+                    print(f"train generalization error ={train_losses[-1]['generalization_error'].numpy():0.2g}, ", end = '')
                 if generalization_error.get('validation', False):
-                    print(f"val generalization error ={val_loss['generalization_error'].numpy():0.2g}, ", end = '')
+                    print(f"val generalization error ={val_losses[-1]['generalization_error'].numpy():0.2g}, ", end = '')
 
                 print(f"time: {time.time() - t0: 0.1f}")
 
@@ -1097,7 +1093,16 @@ class GISUELOGIT(tf.keras.Model):
 
                     optimizer.apply_gradients(zip(grads, self.trainable_variables))
 
-            epoch += 1
+                # Store losses and estimates
+                train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights, loss_metric=mse)
+                val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse)
+
+                train_losses.append(train_loss)
+                val_losses.append(val_loss)
+
+                estimates.append(self.get_parameters_estimates())
+
+                epoch += 1
 
             if self.column_generator is not None:
                 # TODO: Column generation (limit the options to more fundamental ones)
@@ -1128,7 +1133,9 @@ class GISUELOGIT(tf.keras.Model):
         train_losses_df = self.normalized_losses(train_losses_df[losses_columns])#.assign(loss_eq_flow = train_losses_df['loss_eq_flow'])
         val_losses_df = self.normalized_losses(val_losses_df[losses_columns])#.assign(loss_eq_flow = val_losses_df['loss_eq_flow'])
 
-        train_results_df = pd.concat([train_losses_df.reset_index(drop=True), pd.concat(estimates, axis=0).reset_index(drop=True)], axis=1)
+        train_results_df = pd.concat([train_losses_df.reset_index(drop=True),
+                                      pd.concat(estimates, axis=0).reset_index(drop=True)], axis=1).assign(relative_gap = relative_gaps)
+
         val_results_df = val_losses_df.reset_index(drop=True)
 
         # train_losses_df['generalization_error'] = train_generalization_errors

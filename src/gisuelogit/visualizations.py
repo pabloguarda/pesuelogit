@@ -1,5 +1,7 @@
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
+plt.style.use('default')
+
 import seaborn as sns
 import pandas as pd
 import numpy as np
@@ -10,26 +12,40 @@ from isuelogit.mytypes import Matrix
 
 
 def plot_convergence_estimates(estimates: pd.DataFrame,
-                               true_values: Dict = None):
+                               true_values: Dict = None,
+                               xticks_spacing: int = 5):
     # # Add vot
     # estimates = estimates.assign(vot=true_values.apply(compute_vot, axis=1))
 
     estimates = pd.melt(estimates, ['epoch'], var_name = 'parameter')
-
-    true_values = pd.Series(true_values).to_frame().T
-    true_values = true_values[estimates['parameter'].unique()]
 
     # #Add vot
     # true_values = true_values.assign(vot=true_values.apply(compute_vot, axis=1))
 
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color'][0:len(estimates['parameter'].unique())]
 
-    fig, ax = plt.subplots(nrows=1, ncols=1)
+    fig, ax = plt.subplots(nrows=1, ncols=1, figsize = (5,4))
 
     g = sns.lineplot(data=estimates, x='epoch', hue='parameter', y='value')
 
-    ax.hlines(y=true_values.values,
-              xmin=estimates['epoch'].min(), xmax=estimates['epoch'].max(), colors=colors, linestyle='--')
+    if true_values is not None:
+
+        true_values = pd.Series(true_values).to_frame().T
+        true_values = true_values[estimates['parameter'].unique()]
+
+        ax.hlines(y=true_values.values,
+                  xmin=estimates['epoch'].min(), xmax=estimates['epoch'].max(), colors=colors, linestyle='--')
+
+    # ax.grid(False)
+
+    # fig.set_size_inches(4, 3)
+
+    plt.xticks(np.arange(estimates['epoch'].min(), estimates['epoch'].max() + 1, xticks_spacing))
+    plt.xlim(xmin=estimates['epoch'].min(), xmax=estimates['epoch'].max())
+
+    plt.legend(prop={'size': 10})
+
+    return fig, ax
 
 
 def plot_predictive_performance_twoaxes(train_losses: pd.DataFrame,
@@ -70,7 +86,7 @@ def plot_predictive_performance_twoaxes(train_losses: pd.DataFrame,
 
     # ax1.legend(loc = 0)
     # ax2.legend(loc = 1)
-    fig.legend(loc = "upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
+    plt.legend(loc = "upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
 
     fig.show()
 
@@ -79,7 +95,7 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
                                 xticks_spacing: int = 5,
                                 **kwargs) -> None:
 
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize = (5,4))
 
     ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
 
@@ -106,7 +122,7 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
 
     # https://stackoverflow.com/questions/5484922/secondary-axis-with-twinx-how-to-add-to-legend
     plt.xticks(np.arange(train_losses['epoch'].min(), train_losses['epoch'].max() + 1, xticks_spacing))
-    plt.xlim(xmin=train_losses['epoch'].min(), xmax=train_losses['epoch'].max()),
+    plt.xlim(xmin=train_losses['epoch'].min(), xmax=train_losses['epoch'].max())
 
     # plt.ylim(ymin=0, ymax=100)
     plt.ylim(ymin=0)
@@ -118,9 +134,15 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
 
     # ax1.legend(loc = 0)
     # ax2.legend(loc = 1)
-    fig.legend(loc = "upper right", bbox_to_anchor=(1,1), bbox_transform=ax.transAxes)
+    plt.legend(loc = "upper right", bbox_to_anchor=(1,1), bbox_transform=ax.transAxes, prop={'size': 10})
 
     # fig.show()
+
+    # ax.grid(False)
+
+    # plt.legend(prop={'size': 8})
+
+    return fig, ax
 
 
 
@@ -162,7 +184,7 @@ def plot_levels_experiment(results: pd.DataFrame,
     #             errcolor="black", edgecolor="black", linewidth=1.5, errwidth=1.5, ax=ax[(1, 0)])
     sns.barplot(x="level", y="nrmse_val", data=results, color="white",
                 errcolor="black", edgecolor="black", linewidth=1.5, errwidth=1.5, ax=ax[(1, 0)])
-    ax[(1, 0)].set_yticks(np.arange(0, 1 + 0.1, 0.2))
+    ax[(1, 0)].set_yticks(np.arangploye(0, 1 + 0.1, 0.2))
     ax[(1, 0)].set(ylim=(0, 1))
     # ax[(1, 0)].set_ylabel("nrmse training set")
     ax[(1, 0)].set_ylabel("nrmse in test set")
