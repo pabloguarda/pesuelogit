@@ -1,7 +1,3 @@
-'''
-Install isuelogit using pip install -q git+https://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@github.com/pabloguarda/isuelogit.git
-'''
-
 import os
 from pathlib import Path
 from sklearn.model_selection import train_test_split
@@ -86,29 +82,29 @@ X_train, X_test, Y_train, Y_test = train_test_split(X.numpy(), Y.numpy(), test_s
 
 X_train, X_test, Y_train, Y_test = [tf.constant(i) for i in [X_train, X_test, Y_train, Y_test]]
 
-_EPOCHS = 1000
+_EPOCHS = {'learning': 10, 'equilibrium': 2}
 _LR = 1e-1
-_RELATIVE_GAP = 1e-7
+_RELATIVE_GAP = 1e-8
 # To reduce variability in estimates of experiments, it is better to not use batches
 # _BATCH_SIZE = None
 _BATCH_SIZE = 16
-_MOMENTUM_EQUILIBRIUM = 0.99
+_MOMENTUM_EQUILIBRIUM = 1
 
 # loss_metric = mnrmse
 _LOSS_METRIC = mse
 
-_EPOCHS_PRINT_INTERVAL = 10
+_EPOCHS_PRINT_INTERVAL = 5
 
 _LOSS_WEIGHTS ={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1}
 
 # Models
 list_models = ['equilibrium', 'lue', 'ode', 'lpe', 'odlue', 'odlulpe']
 
-# run_model = dict.fromkeys(list_models,True)
-run_model = dict.fromkeys(list_models, False)
+run_model = dict.fromkeys(list_models,True)
+# run_model = dict.fromkeys(list_models, False)
 
 # run_model['equilibrium'] = True
-run_model['lue'] = True
+# run_model['lue'] = True
 # run_model['ode'] = True
 # run_model['lpe'] = True
 # run_model['odlue'] = True
@@ -119,7 +115,7 @@ val_results_dfs = {}
 
 if run_model['equilibrium']:
 
-    _RELATIVE_GAP = 1e-8
+    # _RELATIVE_GAP = 1e-8
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
 
@@ -213,7 +209,7 @@ if run_model['lue']:
     # affect the next model estimation
     optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
 
-    _RELATIVE_GAP = 1e-7
+    # _RELATIVE_GAP = 1e-7
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
@@ -301,7 +297,7 @@ if run_model['lue']:
 if run_model['ode']:
     print('\n ODE: OD estimation with historic OD')
 
-    _RELATIVE_GAP = 1e-6
+    # _RELATIVE_GAP = 1e-6
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
     # optimizer = tf.keras.optimizers.Adagrad(learning_rate=_LR)
@@ -390,7 +386,7 @@ if run_model['ode']:
 if run_model['lpe']:
     print('\nLPE: link performance estimation')
 
-    _RELATIVE_GAP = 1e-9
+    # _RELATIVE_GAP = 1e-9
 
     # optimizer = tf.keras.optimizers.Adagrad(learning_rate=_LR)
 
@@ -413,6 +409,8 @@ if run_model['lpe']:
                                    trainables=dict.fromkeys(['alpha', 'beta'], True),
                                    # trainables={'alpha': False, 'beta': True}
                                    )
+
+    bpr_parameters.random_initializer((0, 0), ['alpha', 'beta'])
 
     Q_historic = isl.factory.random_disturbance_Q(tntp_network.Q, sd=np.mean(tntp_network.Q) * 0.1).copy()
     # Q_historic = tntp_network.Q.copy()
@@ -453,7 +451,7 @@ if run_model['lpe']:
         loss_metric=_LOSS_METRIC,
         # loss_metric=mnrmse,
         # generalization_error={'train': False, 'validation': True},
-        loss_weights= dict(_LOSS_WEIGHTS, od = 1, flow = 0, tt = 1e6),
+        loss_weights= dict(_LOSS_WEIGHTS),
         momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
@@ -484,7 +482,7 @@ if run_model['lpe']:
 if run_model['odlue']:
     print('\nODLUE: OD + utility estimation with historic OD')
 
-    _RELATIVE_GAP = 1e-9
+    # _RELATIVE_GAP = 1e-9
 
     # optimizer = tf.keras.optimizers.Adagrad(learning_rate=_LR)
 
@@ -502,6 +500,7 @@ if run_model['odlue']:
                                            )
 
     # utility_parameters.random_initializer((-1,1),['tt','c','s'])
+    utility_parameters.random_initializer((0, 0), ['tt', 'c', 's'])
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
                                    initial_values={'alpha': 0.15, 'beta': 4},
@@ -560,15 +559,10 @@ if run_model['odlue']:
 
     plot_predictive_performance(train_losses= train_results_losses, val_losses=val_results_dfs['odlue'],
                                 xticks_spacing = 250)
-    plt.show()
 
     plot_convergence_estimates(estimates=train_results_estimates.\
                                assign(vot = train_results_estimates['tt']/train_results_estimates['c'])[['epoch','vot']],
                                true_values={'vot':lue.utility.true_values['tt']/lue.utility.true_values['c']})
-    plt.show()
-
-    plot_convergence_estimates(estimates=train_results_estimates[['epoch','alpha','beta']],
-                               true_values=odlue.bpr.true_values)
     plt.show()
 
     Qs = {'true': tntp_network.OD.Q_true, 'historic': Q_historic, 'estimated': tf.sparse.to_dense(odlue.Q).numpy()}
@@ -583,21 +577,23 @@ if run_model['odlue']:
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(odlue.q - tntp_network.q.flatten())): 0.2f}")
     
 if run_model['odlulpe']:
-    _RELATIVE_GAP = 1e-10
+    # _RELATIVE_GAP = 1e-10
 
     print('\nODLULPE: ODLUE + link performance parameters with historic OD matrix')
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
-                                   # initial_values={'alpha': 0.15, 'beta': 4},
+                                   initial_values={'alpha': 0.15, 'beta': 4},
                                    # initial_values={'alpha': 1, 'beta': 2},
-                                   initial_values={'alpha': np.ones_like(tntp_network.links, dtype=np.float32),
-                                                   'beta': 1 * np.ones_like(tntp_network.links, dtype=np.float32)},
+                                   # initial_values={'alpha': np.ones_like(tntp_network.links, dtype=np.float32),
+                                   #                 'beta': 1 * np.ones_like(tntp_network.links, dtype=np.float32)},
                                    true_values={'alpha': 0.15, 'beta': 4},
                                    # initial_values={'alpha': 0.15, 'beta': 4},
                                    trainables={'alpha': True, 'beta':True},
                                    )
+
+    bpr_parameters.random_initializer((0, 0), ['alpha', 'beta'])
 
     # bpr_parameters.random_initializer((-1,1),['beta'])
     # bpr_parameters.random_initializer((-0.15, 0.15), ['alpha'])
@@ -624,6 +620,7 @@ if run_model['odlulpe']:
                                                , 'tt': True, 'c': True, 's': True},
                                            )
 
+    utility_parameters.random_initializer((0, 0), ['tt', 'c', 's'])
     # utility_parameters.random_initializer((-1,1),['tt','c','s'])
 
     equilibrator = Equilibrator(
@@ -658,6 +655,7 @@ if run_model['odlulpe']:
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
 
+
     train_results_estimates, train_results_losses = odlulpe.split_results(results=train_results_dfs['odlulpe'])
     val_results_estimates, val_results_losses = odlulpe.split_results(results=val_results_dfs['odlulpe'])
 
@@ -671,11 +669,11 @@ if run_model['odlulpe']:
     plot_convergence_estimates(estimates=train_results_estimates[['epoch','alpha','beta']],
                                true_values=odlulpe.bpr.true_values)
 
-    sns.displot(pd.melt(pd.DataFrame({'alpha':odlulpe.alpha, 'beta': odlulpe.beta}), var_name = 'parameters'),
-                x="value", hue="parameters", multiple="stack", kind="kde", alpha = 0.8)
-
-    sns.displot(pd.DataFrame({'fixed_effect':np.array(odlulpe.fixed_effect)}),
-                x="fixed_effect", multiple="stack", kind="kde", alpha = 0.8)
+    # sns.displot(pd.melt(pd.DataFrame({'alpha':odlulpe.alpha, 'beta': odlulpe.beta}), var_name = 'parameters'),
+    #             x="value", hue="parameters", multiple="stack", kind="kde", alpha = 0.8)
+    #
+    # sns.displot(pd.DataFrame({'fixed_effect':np.array(odlulpe.fixed_effect)}),
+    #             x="fixed_effect", multiple="stack", kind="kde", alpha = 0.8)
 
     Qs = {'true': tntp_network.OD.Q_true, 'historic': Q_historic, 'estimated': tf.sparse.to_dense(odlulpe.Q).numpy()}
 

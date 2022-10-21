@@ -1,7 +1,7 @@
 """
 Module for AutoEncoded Stochastic User Equilibrium with Logit Assignment (ODLUE)
 """
-
+import copy
 import isuelogit as isl
 import numpy as np
 import pandas as pd
@@ -283,6 +283,7 @@ class GISUELOGIT(tf.keras.Model):
                  key: str = None,
                  od: ODParameters = None,
                  bpr: Parameters = None,
+                 equilibrator_model: tf.keras.Model = None,
                  equilibrator: Equilibrator = None,
                  column_generator: ColumnGenerator = None,
                  *args,
@@ -313,6 +314,8 @@ class GISUELOGIT(tf.keras.Model):
         self.network = network
         self.equilibrator = equilibrator
         self.column_generator = column_generator
+
+        self.equilibrator_model = equilibrator_model
         
         self.n_features = None
         self.n_links = len(self.network.links)
@@ -340,17 +343,53 @@ class GISUELOGIT(tf.keras.Model):
         # Tolerance parameter
         self._epsilon = 1e-12
 
-    def create_tensor_variables(self, keys: Dict[str, bool] = None):
+    def create_tensor_variables(self, keys: Dict[str, bool] = None,
+                                trainables: Dict[str, bool] = None,
+                                initial_values: Dict[str, bool] = None
+                                ):
 
         if keys is None:
             keys = dict.fromkeys(['q', 'theta', 'psc_factor', 'fixed_effect', 'alpha', 'beta'], True)
 
+        trainables_defaults = {'flows': self.endogenous_flows,
+                      'alpha': self.bpr.parameters['alpha'].trainable,
+                      'beta': self.bpr.parameters['beta'].trainable,
+                      'q': self.od.trainable,
+                      'theta': self.utility.trainables
+                      }
+
+        if trainables is not None:
+            for k,v in trainables_defaults.items():
+                if k not in trainables.keys():
+                    trainables[k] = trainables_defaults[k]
+        else:
+            trainables = trainables_defaults
+
+        initial_values_defaults = {
+            'flows': tf.constant(tf.zeros([self.n_hours,self.n_links], dtype=tf.float64)),
+            'alpha': self.bpr.parameters['alpha'].initial_value,
+            'beta': self.bpr.parameters['beta'].initial_value,
+            'q': self.od.initial_values_array(),
+            'theta': self.utility.initial_values,
+            'psc_factor':self.utility.initial_values['psc_factor'],
+            'fixed_effect': tf.constant(self.utility.initial_values['fixed_effect'],
+                                        shape=tf.TensorShape(self.utility.shapes['fixed_effect']), dtype=tf.float64)
+        }
+
+        if initial_values is not None:
+            for k,v in initial_values_defaults.items():
+                if k not in initial_values.keys():
+                    initial_values[k] = initial_values_defaults[k]
+
+        else:
+            initial_values = initial_values_defaults
+
         # Link specific effect (act as an intercept)
         # if self.endogenous_flows:
         self._flows = tf.Variable(
-            initial_value=tf.math.sqrt(tf.constant(tf.zeros([self.n_hours,self.n_links], dtype=tf.float64))),
+            initial_value=tf.math.sqrt(initial_values['flows']),
             # initial_value=tf.constant(tf.zeros([self.n_hours,self.n_links]), dtype=tf.float64),
-            trainable= self.endogenous_flows,
+            trainable= trainables['flows'],
             name='flows',
             dtype=self.dtype)
 
@@ -360,26 +399,33 @@ class GISUELOGIT(tf.keras.Model):
         if keys.get('alpha', False):
             self._alpha = tf.Variable(
                 # self.bpr.parameters['alpha'].initial_value,
-                np.log(self.bpr.parameters['alpha'].initial_value),
+                initial_value=np.log(initial_values['alpha']),
                 # np.sqrt(self.bpr.parameters['alpha'].initial_value),
-                                      trainable=self.bpr.parameters['alpha'].trainable,
+                                      trainable= trainables['alpha'],
                                       name=self.bpr.parameters['alpha'].key,
                                       dtype=self.dtype)
+
+            self._parameters['alpha'] = self._alpha
+
         if keys.get('beta', False):
             self._beta = tf.Variable(
                 # self.bpr.parameters['beta'].initial_value,
-                np.log(self.bpr.parameters['beta'].initial_value),
+                initial_value=np.log(initial_values['beta']),
                 # np.sqrt(self.bpr.parameters['beta'].initial_value),
-                trainable=self.bpr.parameters['beta'].trainable,
+                trainable=trainables['beta'],
                 name=self.bpr.parameters['beta'].key,
                 dtype=self.dtype)
 
+            self._parameters['beta'] = self._beta
+
 
         if keys.get('q', False):
-            self._q = tf.Variable(initial_value=np.sqrt(self.od.initial_values_array()),
-                                  trainable=self.od.trainable,
+            self._q = tf.Variable(initial_value=np.sqrt(initial_values['q']),
+                                  trainable=trainables['q'],
                                   name=self.od.key,
                                   dtype=self.dtype)
+
+            self._parameters['q'] = self._q
         #
         # TODO: Meantime, the feature parameters of the utility function can be or be not trained altogether based on
         #  on the value of 'tt'. I should allows for separate estimation
@@ -389,25 +435,30 @@ class GISUELOGIT(tf.keras.Model):
             self._theta = []
 
             for feature in self.utility.features:
-                self._theta.append(tf.Variable(initial_value=self.utility.initial_values[feature],
-                                               trainable=self.utility.trainables[feature],
-                                               name="theta",
+                self._theta.append(tf.Variable(initial_value= initial_values['theta'][feature],
+                                               trainable=trainables['theta'][feature],
+                                               name=feature,
                                                dtype=self.dtype))
+
+            self._parameters['theta'] = self._theta
         if keys.get('psc_factor', False):
             # Initialize the psc_factor in a value different than zero to generate gradient
-            self._psc_factor = tf.Variable(initial_value=self.utility.initial_values['psc_factor'],
+            self._psc_factor = tf.Variable(initial_value=initial_values['psc_factor'],
                                            trainable=self.utility.trainables['psc_factor'],
                                            name=self.utility.parameters['psc_factor'].key,
                                            dtype=self.dtype)
 
+            self._parameters['psc_factor'] = self._psc_factor
+
         if keys.get('fixed_effect', False):
             # Link specific effect (act as an intercept)
             self._fixed_effect = tf.Variable(
-                initial_value=tf.constant(self.utility.initial_values['fixed_effect'],
-                                          shape=tf.TensorShape(self.utility.shapes['fixed_effect']), dtype=tf.float64),
+                initial_value= initial_values['fixed_effect'],
                 trainable=self.utility.trainables['fixed_effect'],
                 name=self.utility.parameters['fixed_effect'].key,
                 dtype=self.dtype)
+
+            self._parameters['fixed_effects'] = self._fixed_effect
 
     def flows(self):
         return tf.math.pow(self._flows, 2)
@@ -869,7 +920,7 @@ class GISUELOGIT(tf.keras.Model):
     def normalized_losses(self, losses: pd.DataFrame) -> pd.DataFrame:
 
         columns = [col for col in losses.columns if col != 'epoch']
-        losses[columns] = losses[columns]/losses[losses['epoch'] == losses['epoch'].min()][columns]
+        losses[columns] = losses[columns]/losses[losses['epoch'] == losses['epoch'].min()][columns].values
 
         return losses
 
@@ -928,11 +979,14 @@ class GISUELOGIT(tf.keras.Model):
               Y_val: tf.constant,
               optimizer: tf.keras.optimizers,
               loss_weights: Dict[str, float],
+              epochs: Dict[str, int],
+              initial_values: Dict[str, float] = None,
+              trainables: Dict[str, bool] = None,
               threshold_relative_gap: float = 1e-4,
               loss_metric=None,
               momentum_equilibrium = 1,
+              relative_losses = True,
               generalization_error: Dict[str, bool] = None,
-              epochs=1,
               epochs_print_interval:int = 1,
               batch_size=None) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
@@ -949,20 +1003,21 @@ class GISUELOGIT(tf.keras.Model):
 
         self.n_days, self.n_hours, self.n_links, self.n_features = X_train.shape
 
-        self.create_tensor_variables()
+        self.create_tensor_variables(initial_values = initial_values, trainables=trainables)
 
-        # Initialization of endogenous travel times and flows
-        predicted_flow = self.compute_link_flows(X_train)
-        predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
+        if np.sum(self.flows().numpy()) == 0:
+            # Initialization of endogenous travel times and flows
+            predicted_flow = self.compute_link_flows(X_train)
+            predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
 
-        # if self.endogenous_flows:
-        # Smart initialization is performed running a single pass of traffic assignment under initial theta and q
-        # self._flows.assign(tf.math.sqrt(tf.reduce_mean(predicted_flow,axis = 0)))
-        self._flows.assign(tf.math.sqrt(predicted_flow))
-        # self._flows.assign(tf.squeeze(tf.reduce_mean(self.call(tf.unstack(Y_train,axis = -1)[1]),axis=-1)))
+            # if self.endogenous_flows:
+            # Smart initialization is performed running a single pass of traffic assignment under initial theta and q
+            # self._flows.assign(tf.math.sqrt(tf.reduce_mean(predicted_flow,axis = 0)))
+            self._flows.assign(tf.math.sqrt(predicted_flow))
+            # self._flows.assign(tf.squeeze(tf.reduce_mean(self.call(tf.unstack(Y_train,axis = -1)[1]),axis=-1)))
 
-        if self.endogenous_traveltimes:
-            self._traveltimes.assign(tf.reduce_mean(predicted_traveltimes, axis = 0))
+            if self.endogenous_traveltimes:
+                self._traveltimes.assign(tf.reduce_mean(predicted_traveltimes, axis = 0))
 
         epoch = 0
         t0 = time.time()
@@ -988,6 +1043,12 @@ class GISUELOGIT(tf.keras.Model):
 
         relative_gaps = [threshold_relative_gap]
         terminate_algorithm = False
+
+        if 'equilibrium' not in epochs.keys():
+            epochs['equilibrium'] = 0
+
+        if 'learning' not in epochs.keys():
+            epochs['learning'] = 0
 
         sue_objectives = []
 
@@ -1020,7 +1081,7 @@ class GISUELOGIT(tf.keras.Model):
                 if generalization_error.get('validation', False):
                     val_losses[-1]['generalization_error'] = self.generalization_error(X=X_val, Y=Y_val)
 
-            if epoch == epochs or abs(relative_gaps[-1]) < threshold_relative_gap:
+            if epoch == epochs['learning'] or abs(relative_gaps[-1]) < threshold_relative_gap:
                 terminate_algorithm = True
 
             if epoch % epochs_print_interval == 0 or epoch == 1 or terminate_algorithm:
@@ -1076,6 +1137,8 @@ class GISUELOGIT(tf.keras.Model):
                 #     self._theta.trainable = True
                 #     optimizer.lr = lr
 
+                trainable_variables = self.trainable_variables
+
                 loss_weights['eq_flow'] = loss_weights['eq_flow'] / momentum_equilibrium
 
                 # Normalize weights to one
@@ -1088,8 +1151,7 @@ class GISUELOGIT(tf.keras.Model):
                             self.loss_function(X=X_batch_train, Y=Y_batch_train, lambdas=loss_weights,
                                                loss_metric=loss_metric)['loss_total']
 
-
-                    grads = tape.gradient(train_loss, self.trainable_variables)
+                    grads = tape.gradient(train_loss, trainable_variables)
 
                     # # Apply some clipping (tf.linalg.normada
                     # grads = [tf.clip_by_norm(g, 2) for g in grads]
@@ -1098,7 +1160,7 @@ class GISUELOGIT(tf.keras.Model):
                     # if isinstance(optimizer, NGD):
                     #     grads = [g/tf.linalg.norm(g, 2) for g in grads]
 
-                    optimizer.apply_gradients(zip(grads, self.trainable_variables))
+                    optimizer.apply_gradients(zip(grads, trainable_variables))
 
                 # Store losses and estimates
                 train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights, loss_metric=mse)
@@ -1134,12 +1196,6 @@ class GISUELOGIT(tf.keras.Model):
         val_losses_df.loc[val_losses_df['epoch'] == 0, 'loss_od'] \
             = val_losses_df.loc[val_losses_df['epoch'] == 1, 'loss_od'].copy()
 
-        # Compution of relative losses
-        # losses_columns = [column for column in train_losses_df.keys() if column not in ["loss_eq_flow"]]
-        losses_columns = [column for column in train_losses_df.keys()]
-        train_losses_df = self.normalized_losses(train_losses_df[losses_columns])#.assign(loss_eq_flow = train_losses_df['loss_eq_flow'])
-        val_losses_df = self.normalized_losses(val_losses_df[losses_columns])#.assign(loss_eq_flow = val_losses_df['loss_eq_flow'])
-
         train_results_df = pd.concat([train_losses_df.reset_index(drop=True),
                                       pd.concat(estimates, axis=0).reset_index(drop=True)], axis=1).assign(relative_gap = relative_gaps)
 
@@ -1148,7 +1204,87 @@ class GISUELOGIT(tf.keras.Model):
         # train_losses_df['generalization_error'] = train_generalization_errors
         # val_losses_df['generalization_error'] = val_generalization_errors
 
+        if epoch == epochs['learning'] and epochs['equilibrium']>0:
+
+            print('\nEquilibrium stage\n')
+            train_results_eq, val_results_eq = self.train_equilibrium(
+                X_train = X_train, Y_train = Y_train, X_val = X_val, Y_val = Y_val,
+                # generalization_error={'train': False, 'validation': True},
+                # loss_metric = mse,
+                loss_metric=loss_metric,
+                optimizer=optimizer,
+                batch_size=batch_size,
+                relative_losses = False,
+                threshold_relative_gap=threshold_relative_gap,
+                epochs_print_interval=epochs_print_interval,
+                epochs={'learning':epochs['equilibrium']})
+
+            train_results_eq['epoch'] += train_results_df['epoch'].max()
+            val_results_eq['epoch'] += val_results_df['epoch'].max()
+
+            # for i in ['loss_flow','loss_tt','loss_total','loss_eq_flow']:
+            #     train_results_eq[i] *= train_results_df.iloc[-1,:][i]
+            #     val_results_eq[i] *= val_results_df.iloc[-1, :][i]
+
+            train_results_df = pd.concat([train_results_df,train_results_eq]).reset_index().drop('index', axis = 1)
+            val_results_df = pd.concat([val_results_df, val_results_eq]).reset_index().drop('index', axis = 1)
+
+        if relative_losses:
+            # Compution of relative losses
+            # losses_columns = [column for column in train_losses_df.keys() if column not in ["loss_eq_flow"]]
+            losses_columns = [column for column in train_losses_df.keys()]
+            train_results_df[losses_columns] = self.normalized_losses(train_results_df[losses_columns])#.assign(loss_eq_flow = train_losses_df['loss_eq_flow'])
+            val_results_df[losses_columns] = self.normalized_losses(train_results_df[losses_columns])#.assign(loss_eq_flow = val_losses_df['loss_eq_flow'])
+
+
         return train_results_df, val_results_df
+
+    def train_equilibrium(self, **kwargs):
+
+        suelogit = GISUELOGIT(
+            key='suelogit',
+            # endogenous_flows=True,
+            network=self.network,
+            dtype=tf.float64,
+            equilibrator=self.equilibrator,
+            # column_generator=column_generator,
+            utility=self.utility,
+            bpr=self.bpr,
+            od=self.od
+        )
+
+        trainables = {'flows': True,
+                      'theta': dict(
+                          zip(self.utility.trainables.keys(), [False] * len(self.utility.trainables))),
+                      'alpha': False,
+                      'beta': False,
+                      'q': False,
+                      'fixed_effects': False,
+                      'psc_factor': False,
+                      }
+
+        initial_values = {'flows': self.flows(),
+                          'theta': {parameter.name[:-2]: float(parameter)
+                                    for parameter in self._parameters['theta']},
+                          'alpha': self.alpha,
+                          'beta': self.beta,
+                          'q': self.q,
+                          'fixed_effects': self.fixed_effect,
+                          'psc_factor': self.psc_factor,
+                          }
+
+        # predicted_flow = self.compute_link_flows(X_train)
+        # predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
+        # trainable_variables = self._flows
+
+        kwargs.update(trainables=trainables, initial_values=initial_values)
+
+        train_results_eq, val_results_eq = suelogit.train(
+           **kwargs, loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'eq_flow': 1})
+
+        return  train_results_eq, val_results_eq
+
+
 
     def compute_link_flows(self,X):
 
