@@ -352,11 +352,11 @@ class GISUELOGIT(tf.keras.Model):
             keys = dict.fromkeys(['q', 'theta', 'psc_factor', 'fixed_effect', 'alpha', 'beta'], True)
 
         trainables_defaults = {'flows': self.endogenous_flows,
-                      'alpha': self.bpr.parameters['alpha'].trainable,
-                      'beta': self.bpr.parameters['beta'].trainable,
-                      'q': self.od.trainable,
-                      'theta': self.utility.trainables
-                      }
+                               'alpha': self.bpr.parameters['alpha'].trainable,
+                               'beta': self.bpr.parameters['beta'].trainable,
+                               'q': self.od.trainable,
+                               'theta': self.utility.trainables
+                               }
 
         if trainables is not None:
             for k,v in trainables_defaults.items():
@@ -444,7 +444,7 @@ class GISUELOGIT(tf.keras.Model):
         if keys.get('psc_factor', False):
             # Initialize the psc_factor in a value different than zero to generate gradient
             self._psc_factor = tf.Variable(initial_value=initial_values['psc_factor'],
-                                           trainable=self.utility.trainables['psc_factor'],
+                                           trainable=trainables['theta']['psc_factor'],
                                            name=self.utility.parameters['psc_factor'].key,
                                            dtype=self.dtype)
 
@@ -454,7 +454,7 @@ class GISUELOGIT(tf.keras.Model):
             # Link specific effect (act as an intercept)
             self._fixed_effect = tf.Variable(
                 initial_value= initial_values['fixed_effect'],
-                trainable=self.utility.trainables['fixed_effect'],
+                trainable=trainables['theta']['fixed_effect'],
                 name=self.utility.parameters['fixed_effect'].key,
                 dtype=self.dtype)
 
@@ -1052,25 +1052,33 @@ class GISUELOGIT(tf.keras.Model):
 
         sue_objectives = []
 
+
         while not terminate_algorithm:
+
+            current_sue_objectives = []
 
             if not terminate_algorithm:
 
                 path_flows = self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X_train))))
                 link_flow = self.link_flows(path_flows)
-                relative_x = float(np.nanmean(np.abs(1 * (tf.divide(link_flow,self.flows()) - 1))))
+                relative_x = float(np.nanmean(np.abs(tf.divide(link_flow,self.flows()) - 1)))
 
-                sue_objective = sue_objective_function_fisk(f = path_flows[0,0,:].numpy().flatten(),
-                                                            X = X_train[0, 0, :, :],
-                                                            theta = dict(zip(self.utility.features,self.theta.numpy())),
-                                                            k_Z = self.utility.features_Z,
-                                                            k_Y= self.utility.features_Y,
-                                                            network = self.network)
+                for i in range(X_train.shape[0]):
 
-                sue_objectives.append(sue_objective)
+                    sue_objective = sue_objective_function_fisk(f = path_flows[i,0,:].numpy().flatten(),
+                                                                X = X_train[i, 0, :, :],
+                                                                theta = dict(zip(self.utility.features,self.theta.numpy())),
+                                                                k_Z = self.utility.features_Z,
+                                                                k_Y= self.utility.features_Y,
+                                                                network = self.network)
+
+                    current_sue_objectives.append(sue_objective)
+
+                sue_objectives.append(current_sue_objectives)
 
                 if len(sue_objectives)>=2:
-                    relative_gaps.append((sue_objectives[-1] / sue_objectives[-2] - 1))
+                    relative_gap = np.nanmean(np.abs(np.divide(sue_objectives[-1], sue_objectives[-2]) - 1))
+                    relative_gaps.append(relative_gap)
                     # print(f"{relative_gap:0.2g}")
                     # print(sue_objective)
 
@@ -1234,7 +1242,7 @@ class GISUELOGIT(tf.keras.Model):
             # losses_columns = [column for column in train_losses_df.keys() if column not in ["loss_eq_flow"]]
             losses_columns = [column for column in train_losses_df.keys()]
             train_results_df[losses_columns] = self.normalized_losses(train_results_df[losses_columns])#.assign(loss_eq_flow = train_losses_df['loss_eq_flow'])
-            val_results_df[losses_columns] = self.normalized_losses(train_results_df[losses_columns])#.assign(loss_eq_flow = val_losses_df['loss_eq_flow'])
+            val_results_df[losses_columns] = self.normalized_losses(val_results_df[losses_columns])#.assign(loss_eq_flow = val_losses_df['loss_eq_flow'])
 
 
         return train_results_df, val_results_df
@@ -1258,9 +1266,7 @@ class GISUELOGIT(tf.keras.Model):
                           zip(self.utility.trainables.keys(), [False] * len(self.utility.trainables))),
                       'alpha': False,
                       'beta': False,
-                      'q': False,
-                      'fixed_effects': False,
-                      'psc_factor': False,
+                      'q': False
                       }
 
         initial_values = {'flows': self.flows(),
@@ -1269,7 +1275,7 @@ class GISUELOGIT(tf.keras.Model):
                           'alpha': self.alpha,
                           'beta': self.beta,
                           'q': self.q,
-                          'fixed_effects': self.fixed_effect,
+                          'fixed_effect': self.fixed_effect,
                           'psc_factor': self.psc_factor,
                           }
 
