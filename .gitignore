@@ -151,7 +151,7 @@ examples/scripts/extra-gps/
 input/private
 
 #Output
-output/tables/*
+/output/tables/*
 !output/tables/.gitkeep
 
-!/examples/notebooks/backup/
+/examples/notebooks/backup/
