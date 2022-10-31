@@ -29,7 +29,7 @@ from src.gisuelogit.models import UtilityParameters, BPRParameters, ODParameters
 from src.gisuelogit.visualizations import plot_predictive_performance, plot_convergence_estimates
 from src.gisuelogit.networks import load_k_shortest_paths, read_paths, build_fresno_network, \
     Equilibrator, sparsify_OD, ColumnGenerator, read_OD
-from src.gisuelogit.etl import get_design_tensor, get_y_tensor, data_curation, temporal_split
+from src.gisuelogit.etl import get_design_tensor, get_y_tensor, data_curation, temporal_split, add_period_id
 from src.gisuelogit.descriptive_statistics import mse, btcg_mse, nrmse, mnrmse
 
 # Seed for reproducibility
@@ -65,13 +65,28 @@ df = pd.concat([pd.read_csv(file) for file in glob.glob(folderpath + "*fresno-li
 
 # TODO: Check why there are missing dates, e.g. October 1, 2019
 df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
-df = df[df['date'].dt.dayofweek.between(0, 4)]
+
+# Select data from Tuesday to Thursday
+df = df[df['date'].dt.dayofweek.between(1, 3)]
 # df = df[df['date'].dt.year == 2019]
+
+# TODO: Check why observations from Fridays (day == 4) have average and standard deviation of travel time equal to 0. Meantime we remove observations from Fridays
 
 # df['date'].dt.dayofweek.unique()
 # len(sorted(df['date']).unique())
 df['period'] = df['date'].astype(str) + '-' + df['hour'].astype(str)
-df['period'] = df.period.map(hash)
+# df['period'] = df.period.map(hash)
+
+# Add id for period and respecting the temporal order
+# periods_keys = dict(zip(sorted(df['period'].unique()), range(len(sorted(df['period'].unique())))))
+
+# - By hour
+period_feature = 'hour'
+df = add_period_id(df, period_feature=period_feature)
+
+# period_keys = df[[period_feature,'period_id']].drop_duplicates()
+
+# - By hour
 
 # df1 = pd.read_csv(main_dir + '/input/network-data/' + fresno_network.key + '/links/2019-10-01-fresno-link-data.csv')
 # df1['date'] = "2019-10-01"
@@ -98,8 +113,8 @@ df = data_curation(df)
 
 ## Utility function
 
-features_Z = ['speed_sd', 'median_inc', 'incidents', 'bus_stops', 'intersections']
-# features_Z = ['speed_sd']
+features_Z = ['tt_sd', 'median_inc', 'incidents', 'bus_stops', 'intersections']
+# features_Z = ['tt_sd']
 # features_Z = []
 
 # utility_parameters.constant_initializer(0)
@@ -111,10 +126,14 @@ df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
 df['year'] = df.date.dt.year
 X, Y = {}, {}
 
+df.hour.unique()
+
 # Select only dates used for previous paper
 # df = df.query('date == "2019-10-01"  | date == "2020-10-06"')
 # df = df.query('date == "2019-10-01"')
-df = df.query('hour == 16')
+# df = df.query('hour == 16')
+# df = df.query('hour == 17')
+# df = df.query('hour == 16 | hour == 17')
 # df = df.query('hour == 17')
 
 print(df.query('year == 2019')[['counts', 'tt_ff', 'tt_avg', 'tf_inrix']].describe())
@@ -143,23 +162,26 @@ df['tt_ff'] = df.groupby('link_key')['tt_ff'].transform(lambda x: x.min())
 #Testing
 # df['tt_avg'] = df['tt_ff']
 
-df = df.sort_values(by = 'date').copy()
+# df = df.sort_values(by = 'period').copy()
 
 for year in sorted(df['year'].unique()):
-    df_year = df[df['year'] == year]
+    df_year = df[df['year'] == year].sort_values('period')
 
-    n_days, n_hours = len(df_year.date.unique()), len(df_year.hour.unique())
+    # n_dates, n_hours = len(df_year.date.unique()), len(df_year.hour.unique())
+    #
+    # n_timepoints = n_dates * n_hours
+    n_timepoints = len(df_year.period.unique())
 
     # TODO: Add an assert to check the dataframe is properly sorted before reshaping it into a tensor
 
-    traveltime_data = get_y_tensor(y=df_year[['tt_avg']], n_links=n_links, n_days=n_days, n_hours=n_hours)
-    flow_data = get_y_tensor(y=df_year[['counts']], n_links=n_links, n_days=n_days, n_hours=n_hours)
+    traveltime_data = get_y_tensor(y=df_year[['tt_avg']], n_links=n_links, n_timepoints=n_timepoints)
+    flow_data = get_y_tensor(y=df_year[['counts']], n_links=n_links, n_timepoints=n_timepoints)
 
-    Y[year] = tf.concat([traveltime_data, flow_data], axis=3)
+    Y[year] = tf.concat([traveltime_data, flow_data], axis=2)
 
-    X[year] = get_design_tensor(Z=df_year[features_Z], n_links=n_links, n_days=n_days, n_hours=n_hours)
+    X[year] = get_design_tensor(Z=df_year[features_Z+['period_id']], n_links=n_links, n_timepoints=n_timepoints)
 
-    tt_ff = get_design_tensor(Z=df_year[['tt_ff']], n_links=n_links, n_days=n_days, n_hours=n_hours)
+    tt_ff = get_design_tensor(Z=df_year[['tt_ff']], n_links=n_links, n_timepoints=n_timepoints)
 
 
 len(df.date.unique())
@@ -180,25 +202,55 @@ len(df.date.unique())
 # df.tt_ff.mean()
 # df.tt_avg.mean()
 
+# EDA
+
+eda_df = df.copy()
+eda_df['date'] = eda_df['date'].astype(str)
+
+# Transform to monthly income
+eda_df['median_inc'] = eda_df['median_inc']/12
+
+sns.lineplot(x= 'date', y = 'counts', data =eda_df.groupby('date')[['counts']].mean().reset_index())
+plt.tight_layout()
+plt.xticks(rotation=90)
+# plt.show()
+
+
+sns.lineplot(x= 'date', y = 'value', hue = 'variable', data =pd.melt(eda_df.groupby('date')[features_Z].mean().reset_index(),id_vars= ['date']))
+plt.tight_layout()
+plt.xticks(rotation=90)
+# plt.show()
+
+sns.lineplot(x= 'date', y = 'speed_avg', data =eda_df.groupby('date')[['speed_avg']].mean().reset_index())
+plt.tight_layout()
+plt.xticks(rotation=90)
+# plt.show()
+plt.show()
+
+print(eda_df.groupby('date')[features_Z].mean())
+
+print(df.groupby('date')[['tt_avg', 'tt_sd', 'tt_ff']].mean())
+
 ## Training and validation sets
 
 # We only pick data from one year
-X = X[2019]
-Y = Y[2019]
+# X = X[2019]
+# Y = Y[2019]
 
 # Prepare the training and validation dataset
-X, Y = tf.concat(X,axis = 0), tf.concat(Y,axis = 0)
+# X, Y = tf.concat(X,axis = 0), tf.concat(Y,axis = 0)
 
 # Split to comply with temporal ordering
-X_train, X_test, Y_train, Y_test = temporal_split(X.numpy(), Y.numpy(), n_days = X.shape[0])
+# X_train, X_test, Y_train, Y_test = temporal_split(X.numpy(), Y.numpy(), n_days = X.shape[0])
 
 # X_train, X_test, Y_train, Y_test = train_test_split(X.numpy(), Y.numpy(), test_size=0.5, random_state=_SEED)
-# X_train, X_test, Y_train, Y_test = X[2019], X[2020], Y[2019], Y[2020]
+X_train, X_test, Y_train, Y_test = X[2019], X[2020], Y[2019], Y[2020]
 
-X_train, X_test, Y_train, Y_test = [tf.constant(i) for i in [X_train, X_test, Y_train, Y_test]]
+X_test, Y_test = None, None
 
 #Models
-run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe-2', 'tvodlulpe'], True)
+# run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe-2', 'tvodlulpe'], True)
+run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe-2', 'tvodlulpe'], False)
 
 # run_model.update(dict.fromkeys(['lue', 'odlue', 'odlulpe'], True))
 # run_model = dict.fromkeys( for i in ['lue', 'odlue', 'odlulpe'], True)
@@ -207,28 +259,36 @@ run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','od
 # run_model['odlue'] = True
 # run_model['odlulpe-1'] = True
 # run_model['odlulpe-2'] = True
+run_model['tvodlulpe'] = True
 
 train_results_dfs = {}
 test_results_dfs = {}
-#
-# TODO: It will be not included for IATBR abstract and maybe not in paper 2
-# run_model['tvodlulpe'] = True
 
-_EPOCHS = 40
-_BATCH_SIZE = 16
+_EPOCHS = {'learning': 10, 'equilibrium': 10}
+# _EPOCHS = {'learning': 500, 'equilibrium': 0}
+_BATCH_SIZE = None
 _LR = 5e-1
 _RELATIVE_GAP = 1e-5
-_XTICKS_SPACING = 20
+_XTICKS_SPACING = 50
 _EPOCHS_PRINT_INTERVAL = 10
+
+_LOSS_METRIC  = mnrmse
+
+# Excluding historic OD gives more freedom for the model to find an equilibria and minimize reconstruction error
+_LOSS_WEIGHTS ={'od': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1}
 _MOMENTUM_EQUILIBRIUM = 0.99
+#_MOMENTUM_EQUILIBRIUM = 1
+
+# Including historic OD matrix
+# _LOSS_WEIGHTS ={'od': 1, 'tt': 1, 'flow': 1, 'eq_flow': 1}
+# _MOMENTUM_EQUILIBRIUM = 0.99
 
 # _LOSS_METRIC = mse
 # _LOSS_WEIGHTS ={'od': 1, 'theta': 0, 'tt': 1e10, 'flow': 1, 'eq_flow': 1}
 
 #_LOSS_METRIC  = btcg_mse
-# _LOSS_METRIC  = mnrmse
-_LOSS_METRIC  = nrmse
-_LOSS_WEIGHTS ={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1}
+#_LOSS_METRIC  = mnrmse
+
 
 print(f"Relative gap threshold: {_RELATIVE_GAP}, "
       f"Learning rate: {_LR}, "
@@ -244,13 +304,12 @@ if run_model['equilibrium']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           periods=1,
-                                           initial_values={'tt': 0, 'psc_factor': 0,
+                                           initial_values={'tt': -1, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(fresno_network.links)},
-                                           signs={'tt': '-', 'speed_sd': '-', 'median_inc': '+', 'incidents': '-',
+                                           signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
                                                   'bus_stops': '-', 'intersections': '-'},
                                            trainables={'psc_factor': False, 'fixed_effect': False,
-                                                       'tt': False, 'speed_sd': False, 'median_inc': False,
+                                                       'tt': False, 'tt_sd': False, 'median_inc': False,
                                                        'incidents': False,
                                                        'bus_stops': False, 'intersections': False
                                                        },
@@ -262,7 +321,6 @@ if run_model['equilibrium']:
                                    )
 
     od_parameters = ODParameters(key='od',
-                                 periods=1,
                                  # initial_values=0.6 * tntp_network.q.flatten(),
                                  initial_values=fresno_network.q.flatten(),
                                  true_values=fresno_network.q.flatten(),
@@ -287,7 +345,7 @@ if run_model['equilibrium']:
                                        # ods_sampling='demand',
                                        )
 
-    print("\nLink flow based autoencoder")
+    print("\nSUELOGIT equilibrium")
 
     suelogit = GISUELOGIT(
         key='suelogit',
@@ -345,13 +403,12 @@ if run_model['ode']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           periods=1,
                                            initial_values={'psc_factor': 0, 'tt':0,
                                                            'fixed_effect': np.zeros_like(fresno_network.links)},
-                                           signs={'tt': '-', 'speed_sd': '-', 'median_inc': '+', 'incidents': '-',
+                                           signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
                                                   'bus_stops': '-', 'intersections': '-'},
                                            trainables={'psc_factor': False, 'fixed_effect': False,
-                                                       'tt': False, 'speed_sd': False, 'median_inc': False,
+                                                       'tt': False, 'tt_sd': False, 'median_inc': False,
                                                        'incidents': False,
                                                        'bus_stops': False, 'intersections': False
                                                        },
@@ -363,7 +420,6 @@ if run_model['ode']:
                                    )
 
     od_parameters = ODParameters(key='od',
-                                 periods=1,
                                  initial_values=fresno_network.q.flatten(),
                                  historic_values={1: fresno_network.q.flatten()},
                                  trainable=True)
@@ -421,13 +477,12 @@ if run_model['lue']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           periods=1,
                                            initial_values={'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(fresno_network.links)},
-                                           signs={'tt': '-', 'speed_sd': '-', 'median_inc': '+', 'incidents': '-',
+                                           signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
                                                   'bus_stops': '-', 'intersections': '-'},
                                            trainables={'psc_factor': False, 'fixed_effect': True,
-                                                       'tt': True, 'speed_sd': True, 'median_inc': True, 'incidents': True,
+                                                       'tt': True, 'tt_sd': True, 'median_inc': True, 'incidents': True,
                                                               'bus_stops': True, 'intersections': True
                                                        },
                                            )
@@ -440,7 +495,6 @@ if run_model['lue']:
                                    )
 
     od_parameters = ODParameters(key='od',
-                                 periods=1,
                                  # initial_values=0.6 * tntp_network.q.flatten(),
                                  initial_values=fresno_network.q.flatten(),
                                  true_values=fresno_network.q.flatten(),
@@ -513,13 +567,12 @@ if run_model['odlue']:
     # optimizer = tf.keras.optimizers.Adagrad(learning_rate=_LR)
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           periods=1,
                                            initial_values={'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(fresno_network.links)},
-                                           signs={'tt': '-', 'speed_sd': '-', 'median_inc': '+', 'incidents': '-',
+                                           signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
                                                   'bus_stops': '-', 'intersections': '-'},
                                            trainables={'psc_factor': False, 'fixed_effect': True,
-                                                       'tt': True, 'speed_sd': True, 'median_inc': True,
+                                                       'tt': True, 'tt_sd': True, 'median_inc': True,
                                                        'incidents': True,
                                                        'bus_stops': True, 'intersections': True
                                                        },
@@ -531,7 +584,6 @@ if run_model['odlue']:
                                    )
 
     od_parameters = ODParameters(key='od',
-                                 periods=1,
                                  initial_values=fresno_network.q.flatten(),
                                  historic_values={1: fresno_network.q.flatten()},
                                  trainable=True)
@@ -606,20 +658,19 @@ if run_model['odlulpe-1']:
                                    )
 
     od_parameters = ODParameters(key='od',
-                                 periods=1,
                                  initial_values=fresno_network.q.flatten(),
                                  historic_values={1: fresno_network.q.flatten()},
                                  trainable=True)
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           periods=1,
+
                                            initial_values={'psc_factor': 0, 'tt':0,
                                                            'fixed_effect': np.zeros_like(fresno_network.links)},
-                                           signs={'tt': '-', 'speed_sd': '-', 'median_inc': '+', 'incidents': '-',
+                                           signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
                                                   'bus_stops': '-', 'intersections': '-'},
                                            trainables={'psc_factor': False, 'fixed_effect': True,
-                                                       'tt': True, 'speed_sd': True, 'median_inc': True,
+                                                       'tt': True, 'tt_sd': True, 'median_inc': True,
                                                        'incidents': True,
                                                        'bus_stops': True, 'intersections': True
                                                        },
@@ -711,20 +762,18 @@ if run_model['odlulpe-2']:
                                    )
 
     od_parameters = ODParameters(key='od',
-                                 periods=1,
                                  initial_values=fresno_network.q.flatten(),
                                  historic_values={1: fresno_network.q.flatten()},
                                  trainable=True)
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           periods=1,
                                            initial_values={'psc_factor': 0, 'tt':0,
                                                            'fixed_effect': np.zeros_like(fresno_network.links)},
-                                           signs={'tt': '-', 'speed_sd': '-', 'median_inc': '+', 'incidents': '-',
+                                           signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
                                                   'bus_stops': '-', 'intersections': '-'},
                                            trainables={'psc_factor': False, 'fixed_effect': True,
-                                                       'tt': True, 'speed_sd': True, 'median_inc': True,
+                                                       'tt': True, 'tt_sd': True, 'median_inc': True,
                                                        'incidents': True,
                                                        'bus_stops': True, 'intersections': True
                                                        },
@@ -796,12 +845,11 @@ if run_model['tvodlulpe']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           periods=3,
                                            initial_values={'tt': 0, 'c': 0, 's': 0, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(fresno_network.links)},
-                                           signs={'tt': '-', 'speed_sd': '-', 'median_inc': '+', 'incidents': '-',
+                                           signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
                                                   'bus_stops': '-', 'intersections': '-'},
-                                           trainables={'psc_factor': False, 'fixed_effect': False},
+                                           trainables={'psc_factor': False, 'fixed_effect': True},
                                            )
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
@@ -812,21 +860,20 @@ if run_model['tvodlulpe']:
                                    )
 
     od_parameters = ODParameters(key='od',
-                                 periods=3,
                                  initial_values=fresno_network.q.flatten(),
+                                 true_values=fresno_network.q.flatten(),
+                                 historic_values={1: fresno_network.q.flatten()},
                                  trainable=True)
 
     tvodlulpe = GISUELOGIT(
         key='tvodlulpe',
         network=fresno_network,
         dtype=tf.float64,
-        equilibrator=equilibrator,
-        column_generator=column_generator,
         utility=utility_parameters,
         bpr=bpr_parameters,
         od=od_parameters,
+        n_periods = len(np.unique(X_train[:,:,-1].numpy().flatten()))
     )
-
     train_results_dfs['tvodlulpe'], test_results_dfs['tvodlulpe'] = tvodlulpe.train(
         X_train, Y_train, X_test, Y_test,
         optimizer=optimizer,
@@ -838,14 +885,55 @@ if run_model['tvodlulpe']:
         threshold_relative_gap=_RELATIVE_GAP,
         epochs=_EPOCHS)
 
-    plot_predictive_performance(train_losses=train_results_dfs['tvodlulpe'], val_losses=test_results_dfs['tvodlulpe'])
 
+
+
+
+    q_dict1 = dict(zip(fresno_network.ods, list(tvodlulpe.q[0].numpy())))
+    q_values_2 = dict(zip(fresno_network.ods, list(tvodlulpe.q[1].numpy())))
+    peri
+    period_keys = df[[period_feature, 'period_id']].drop_duplicates()
+    q_df = pd.DataFrame({})
+    for i,j in zip(range(tvodlulpe.q.shape[0]),list(period_keys[period_feature])):
+        q_dict = dict(zip(fresno_network.ods, list(tvodlulpe.q[i].numpy())))
+        q_df = q_df.append(pd.DataFrame(q_dict, index=[j]))
+
+    q1 = pd.Series(data = q_values_1.values(), index = list(q_values_1.keys()))
+    q2 = pd.Series(data=q_values_2.values(), index=list(q_values_2.keys()))
+
+    pd.DataFrame(data = list(q1.values), columns = list(map(str, list(q1.keys()))))
+
+    pd.DataFrame(q_dict1, index = [0])
+
+    pd.DataFrame({'a':2, 'b':3},index = [0])
+    pd.DataFrame(q_values_1, index = [0])
+
+    len(list(q1.keys()))
+
+    pd.DataFrame()
+
+    glue = sns.load_dataset("glue").pivot("Model", "Task", "Score")
+
+    sns.heatmap(q_df.transpose(), linewidth=0.5, cmap="Blues",vmin =0)
     plt.show()
 
-    print(f"features = {utility_parameters.features}")
-    print(f"theta = {'tvodlulpe'.theta.numpy()}")
-    print(f"alpha = {'tvodlulpe'.alpha: 0.2f}, beta  = {'tvodlulpe'.beta: 0.2f}")
-    print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs('tvodlulpe'.q - fresno_network.q.flatten())): 0.2f}")
+    plot_predictive_performance(train_losses=train_results_dfs['tvodlulpe'], val_losses=test_results_dfs['tvodlulpe'])
+
+    plot_convergence_estimates(estimates=train_results_dfs['tvodlulpe'][['epoch', 'alpha', 'beta']],
+                               xticks_spacing=_XTICKS_SPACING)
+
+    # sns.displot(pd.melt(pd.DataFrame({'alpha': tvodlulpe.alpha, 'beta': tvodlulpe.beta}), var_name='parameters'),
+    #             x="value", hue="parameters", multiple="stack", kind="kde", alpha=0.8)
+
+    sns.displot(pd.DataFrame({'fixed_effect': np.array(tvodlulpe.fixed_effect)}),
+                x="fixed_effect", multiple="stack", kind="kde", alpha=0.8)
+
+    plt.show()
+    
+    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(tvodlulpe.theta.numpy())))}")
+    print(f"alpha = {np.mean(tvodlulpe.alpha): 0.2f}, beta  = {np.mean(tvodlulpe.beta): 0.2f}")
+    print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(tvodlulpe.q - fresno_network.q.flatten())): 0.2f}")
+    print(f"Avg observed OD: {np.mean(np.abs(fresno_network.q.flatten())): 0.2f}")
 
 ## Write csv file with estimation results
 

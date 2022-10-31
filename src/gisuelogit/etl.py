@@ -27,13 +27,13 @@ def simulate_features(n_days, daytoday_variation = False, **kwargs):
     return df
 
 
-def convert_multiperiod_df_to_tensor(df, n_days, n_links, features, n_hours=1):
+def convert_multiperiod_df_to_tensor(df, n_timepoints: int, n_links: int, features: List[str]):
     '''
-    Convert to a tensor of dimensions (n_days, n_hours, n_links, n_features).
+    Convert to a tensor of dimensions (n_timepoints, n_hours, n_links, n_features).
     df is a dataframe that contains the feature data
     '''
 
-    return tf.constant(np.array(df[features]).reshape(n_days, n_hours, n_links, len(features)))
+    return tf.constant(np.array(df[features]).reshape(n_timepoints, n_links, len(features)))
 
 def temporal_split(X,Y, n_days = None):
 
@@ -56,7 +56,7 @@ def simulate_features_tensor(**kwargs):
     return convert_multiperiod_df_to_tensor(df=simulate_features(**kwargs),
                                             n_links=len(kwargs['links']),
                                             features=kwargs['features_Z'],
-                                            n_days=kwargs['n_days']
+                                            n_timepoints=kwargs['n_timepoints']
                                             )
 
 
@@ -111,7 +111,7 @@ def get_design_tensor(Z: pd.DataFrame = None,
                       y: pd.DataFrame = None,
                       **kwargs) -> tf.Tensor:
     """
-    return tensor with dimensions (n_days, n_links, 1+n_features)
+    return tensor with dimensions (n_timepoints, n_links, 1+n_features)
     """
 
     if Z is None:
@@ -129,6 +129,21 @@ def get_design_tensor(Z: pd.DataFrame = None,
 def get_y_tensor(y: pd.DataFrame, **kwargs):
     return convert_multiperiod_df_to_tensor(y, features=y.columns, **kwargs)
 
+def add_period_id(df: pd.DataFrame, period_feature: str = None, varname = 'period_id'):
+
+    if period_feature is None:
+        df[varname] = 0
+
+    if period_feature is not None:
+        periods_keys = dict(zip(sorted(df[period_feature].unique()), range(len(sorted(df[period_feature].unique())))))
+
+        df = df.merge(pd.DataFrame({period_feature: periods_keys.keys(), varname: periods_keys.values()}),
+                      left_on=period_feature, right_on=period_feature)
+
+    return df
+    
+    
+    
 def traveltime_imputation(raw_data: pd.DataFrame):
 
     # Set free flow travel time based on the minimum of the minimums travel times in the set of measurements

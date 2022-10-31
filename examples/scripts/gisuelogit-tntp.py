@@ -18,7 +18,7 @@ from datetime import datetime
 from src.gisuelogit.visualizations import plot_predictive_performance, plot_heatmap_demands, plot_convergence_estimates
 from src.gisuelogit.models import UtilityParameters, GISUELOGIT, AETSUELOGIT, NGD, BPRParameters, ODParameters
 from src.gisuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator, ColumnGenerator
-from src.gisuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data
+from src.gisuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data, add_period_id
 from src.gisuelogit.descriptive_statistics import mse, btcg_mse, mnrmse
 
 # Seed for reproducibility
@@ -58,31 +58,33 @@ features_Z.extend(features_sparse)
 
 # Prepare the training and validation dataset.
 
-n_days = len(df.period.unique())
+n_timepoints = len(df.period.unique())
 n_links = len(tntp_network.links)
-n_hours = 1
 
 # Add free flow travel times
-df['tt_ff'] = np.tile([link.bpr.tf for link in tntp_network.links], n_days)
+df['tt_ff'] = np.tile([link.bpr.tf for link in tntp_network.links], n_timepoints)
 
 # TODO: exclude test data from transform to avoid data leakage
 # df[features_Z + ['traveltime'] + ['tt_ff']] \
 #     = preprocessing.MaxAbsScaler().fit_transform(df[features_Z + ['traveltime'] + ['tt_ff']])
 
-
 # X_train, X_val, y_train, y_val = train_test_split(input_data, traveltime_data, test_size=0.2, random_state=42)
+traveltime_data = get_design_tensor(y=df['traveltime'], n_links=n_links, n_timepoints = n_timepoints)
+flow_data = get_y_tensor(y=df[['counts']], n_links=n_links, n_timepoints = n_timepoints)
 
-traveltime_data = get_design_tensor(y=df['traveltime'], n_links=n_links, n_days=n_days, n_hours=n_hours)
-flow_data = get_y_tensor(y=df[['counts']], n_links=n_links, n_days=n_days, n_hours=n_hours)
+df['hour'] = 0
+df.loc[df['period']<= 50,'hour'] = 1
+df = add_period_id(df, period_feature='hour')
+# df = add_period_id(df, period_feature='period')
 
-Y = tf.concat([traveltime_data, flow_data], axis=3)
-X = get_design_tensor(Z=df[features_Z], n_links=n_links, n_days=n_days, n_hours=n_hours)
+Y = tf.concat([traveltime_data, flow_data], axis=2)
+X = get_design_tensor(Z=df[features_Z + ['period_id']], n_links=n_links, n_timepoints = n_timepoints)
 
 X_train, X_test, Y_train, Y_test = train_test_split(X.numpy(), Y.numpy(), test_size=0.2, random_state=_SEED)
 
 X_train, X_test, Y_train, Y_test = [tf.constant(i) for i in [X_train, X_test, Y_train, Y_test]]
 
-_EPOCHS = {'learning': 10, 'equilibrium': 2}
+_EPOCHS = {'learning': 400, 'equilibrium': 2}
 _LR = 1e-1
 _RELATIVE_GAP = 1e-8
 # To reduce variability in estimates of experiments, it is better to not use batches
@@ -95,17 +97,17 @@ _LOSS_METRIC = mse
 
 _EPOCHS_PRINT_INTERVAL = 5
 
-_LOSS_WEIGHTS ={'od': 0, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1}
+_LOSS_WEIGHTS ={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1}
 
 # Models
 list_models = ['equilibrium', 'lue', 'ode', 'lpe', 'odlue', 'odlulpe']
 
-run_model = dict.fromkeys(list_models,True)
-# run_model = dict.fromkeys(list_models, False)
+# run_model = dict.fromkeys(list_models,True)
+run_model = dict.fromkeys(list_models, False)
 
 # run_model['equilibrium'] = True
 # run_model['lue'] = True
-# run_model['ode'] = True
+run_model['ode'] = True
 # run_model['lpe'] = True
 # run_model['odlue'] = True
 # run_model['odlulpe'] = True
@@ -123,7 +125,6 @@ if run_model['equilibrium']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           periods=1,
                                            initial_values={'tt': -1, 'c': -6, 's': -3, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(tntp_network.links)},
                                            trainables={'psc_factor': False, 'fixed_effect': False
@@ -137,7 +138,6 @@ if run_model['equilibrium']:
                                    )
 
     od_parameters = ODParameters(key='od',
-                                 periods=1,
                                  # initial_values=0.6 * tntp_network.q.flatten(),
                                  initial_values=tntp_network.q.flatten(),
                                  true_values=tntp_network.q.flatten(),
@@ -213,7 +213,6 @@ if run_model['lue']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           periods=1,
                                            initial_values={'tt': 0, 'c': 0, 's': 0, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(tntp_network.links)},
                                            true_values={'tt': -1, 'c': -6, 's': -3},
@@ -234,7 +233,6 @@ if run_model['lue']:
     q_historic = tntp_network.q
 
     od_parameters = ODParameters(key='od',
-                                 periods=1,
                                  # initial_values=0.6 * tntp_network.q.flatten(),
                                  # initial_values=tntp_network.q.flatten(),
                                  # true_values=tntp_network.q.flatten(),
@@ -262,7 +260,8 @@ if run_model['lue']:
         # column_generator=column_generator,
         utility=utility_parameters,
         bpr=bpr_parameters,
-        od=od_parameters
+        od=od_parameters,
+        n_periods=len(np.unique(X_train[:, :, -1].numpy().flatten()))
     )
 
     train_results_dfs['lue'], val_results_dfs['lue'] = lue.train(
@@ -304,7 +303,6 @@ if run_model['ode']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           periods=1,
                                            initial_values={'tt': -1, 'c': -6, 's': -3, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(tntp_network.links)},
                                            trainables={'psc_factor': False, 'fixed_effect': False
@@ -319,7 +317,6 @@ if run_model['ode']:
     Q_historic = isl.factory.random_disturbance_Q(tntp_network.Q, sd=np.mean(tntp_network.Q) * 0.1).copy()
 
     od_parameters = ODParameters(key='od',
-                                 periods=1,
                                  # initial_values=tntp_network.q.flatten(),
                                  initial_values= isl.networks.denseQ(Q_historic).flatten(),
                                  # initial_values=np.ones_like(tntp_network.q.flatten()),
@@ -354,6 +351,7 @@ if run_model['ode']:
         utility=utility_parameters,
         bpr=bpr_parameters,
         od=od_parameters,
+        n_periods=len(np.unique(X_train[:, :, -1].numpy().flatten()))
     )
 
     train_results_dfs['ode'], val_results_dfs['ode'] = ode.train(
@@ -394,7 +392,6 @@ if run_model['lpe']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           periods=1,
                                            initial_values={'tt': -1, 'c': -6, 's': -3, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(tntp_network.links)},
                                            trainables={'psc_factor': False, 'fixed_effect': False
@@ -416,7 +413,6 @@ if run_model['lpe']:
     # Q_historic = tntp_network.Q.copy()
 
     od_parameters = ODParameters(key='od',
-                                 periods=1,
                                  # initial_values=tntp_network.q.flatten(),
                                  initial_values= isl.networks.denseQ(Q_historic).flatten(),
                                  # initial_values=np.ones_like(tntp_network.q.flatten()),
@@ -490,7 +486,6 @@ if run_model['odlue']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           periods=1,
                                            initial_values={'tt': 0, 'c': 0, 's': 0, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(tntp_network.links)},
                                            true_values={'tt': -1, 'c': -6, 's': -3},
@@ -511,7 +506,6 @@ if run_model['odlue']:
     Q_historic = isl.factory.random_disturbance_Q(tntp_network.Q, sd=np.mean(tntp_network.Q) * 0.1).copy()
 
     od_parameters = ODParameters(key='od',
-                                 periods=1,
                                  # initial_values=tntp_network.q.flatten(),
                                  initial_values= isl.networks.denseQ(Q_historic).flatten(),
                                  # initial_values=np.ones_like(tntp_network.q.flatten()),
@@ -601,7 +595,6 @@ if run_model['odlulpe']:
     Q_historic = isl.factory.random_disturbance_Q(tntp_network.Q, sd=np.mean(tntp_network.Q) * 0.1).copy()
 
     od_parameters = ODParameters(key='od',
-                                 periods=1,
                                  # initial_values=tntp_network.q.flatten(),
                                  initial_values=isl.networks.denseQ(Q_historic).flatten(),
                                  # initial_values=np.ones_like(tntp_network.q.flatten()),
@@ -611,7 +604,6 @@ if run_model['odlulpe']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           periods=1,
                                            initial_values={'tt': 0, 'c': 0, 's': 0, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(tntp_network.links)},
                                            true_values={'tt': -1, 'c': -6, 's': -3},
@@ -699,7 +691,6 @@ os.getcwd()
 
 ## Plot of convergence toward true vot across models
 
-models = [lue,odlue,odlulpe]
 
 train_estimates = {}
 train_losses = {}

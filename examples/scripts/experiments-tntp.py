@@ -75,7 +75,7 @@ features_Z.extend(features_sparse)
 ## Prepare the training and validation dataset
 
 # Add free flow travel times
-# df['tt_ff'] = np.tile([link.bpr.tf for link in tntp_network.links], n_days)
+# df['tt_ff'] = np.tile([link.bpr.tf for link in tntp_network.links], n_timepoints)
 
 X = get_design_tensor(Z=df[features_Z], n_links=n_links, n_days=n_days, n_hours=n_hours)
 

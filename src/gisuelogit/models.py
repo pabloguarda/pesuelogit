@@ -40,7 +40,7 @@ class Parameters(isl.estimation.UtilityFunction):
                  keys=None,
                  shapes=None,
                  trainables=None,
-                 periods: int = 1,
+                 n_periods: bool = False,
                  link_specifics=None,
                  *args,
                  **kwargs):
@@ -50,7 +50,8 @@ class Parameters(isl.estimation.UtilityFunction):
         if keys is None:
             keys = {}
 
-        self.periods = periods
+        # self.time_varying = time_varying
+        self.n_periods = n_periods
 
         for key in keys:
             self.parameters[key] = Parameter(key=key,
@@ -128,10 +129,10 @@ class Parameters(isl.estimation.UtilityFunction):
         if features is not None:
             values_list = [self.true_values[feature] for feature in features]
 
-        if self.periods == 1:
+        if self.n_periods == 1:
             return np.array(list(values_list))
 
-        return np.repeat(np.array(values_list)[np.newaxis, :], self.periods, axis=0)
+        return np.repeat(np.array(values_list)[np.newaxis, :], self.n_periods, axis=0)
 
     def initial_values_array(self, features=None) -> np.array:
 
@@ -140,10 +141,10 @@ class Parameters(isl.estimation.UtilityFunction):
         if features is not None:
             values_list = [self.initial_values[feature] for feature in features]
 
-        if self.periods == 1:
+        if self.n_periods == 1:
             return np.array(list(values_list))
 
-        return np.repeat(np.array(values_list)[np.newaxis, :], self.periods, axis=0)
+        return np.repeat(np.array(values_list)[np.newaxis, :], self.n_periods, axis=0)
 
     def constant_initializer(self, value):
         self.initial_values = dict.fromkeys(self.keys(), value)
@@ -229,7 +230,7 @@ class ODParameters(Parameters):
         # historic_od = tf.expand_dims(tf.constant(self.network.q.flatten()), axis=0)
         # if len(list(self.historic_values.keys())) > 1:
 
-        historic_od = np.empty((self.periods, self.shape[0]))
+        historic_od = np.empty((self.n_periods, self.shape[0]))
         historic_od[:] = np.nan
 
         for period, od in self.historic_values.items():
@@ -260,17 +261,17 @@ class ODParameters(Parameters):
 
     def true_values_array(self) -> np.array:
 
-        if self.periods == 1:
+        if self.n_periods == 1:
             return self.true_value
 
-        return np.repeat(self.true_value[np.newaxis, :], self.periods, axis=0)
+        return np.repeat(self.true_value[np.newaxis, :], self.n_periods, axis=0)
 
     def initial_values_array(self) -> np.array:
 
-        if self.periods == 1:
+        if self.n_periods == 1:
             return self.initial_value
 
-        return np.repeat(self.initial_value[np.newaxis, :], self.periods, axis=0)
+        return np.repeat(self.initial_value[np.newaxis, :], self.n_periods, axis=0)
 
 
 class GISUELOGIT(tf.keras.Model):
@@ -286,6 +287,7 @@ class GISUELOGIT(tf.keras.Model):
                  equilibrator_model: tf.keras.Model = None,
                  equilibrator: Equilibrator = None,
                  column_generator: ColumnGenerator = None,
+                 n_periods: int = 1,
                  *args,
                  **kwargs):
 
@@ -320,10 +322,14 @@ class GISUELOGIT(tf.keras.Model):
         self.n_features = None
         self.n_links = len(self.network.links)
         self.n_days = None
-        self.n_hours = 1
+        self.n_periods = n_periods
+
+        self.period_ids = None
 
         self.utility = utility
+        # self.utility.n_periods = n_periods
         self.od = od
+        self.od.n_periods = n_periods
 
         # self.linklist = [(link.key[0], link.key[1]) for link in self.network.links]
         self.n_nodes = self.network.get_n_nodes()
@@ -366,7 +372,8 @@ class GISUELOGIT(tf.keras.Model):
             trainables = trainables_defaults
 
         initial_values_defaults = {
-            'flows': tf.constant(tf.zeros([self.n_hours,self.n_links], dtype=tf.float64)),
+            'flows': tf.constant(tf.zeros([self.n_periods,self.n_links], dtype=tf.float64)),
+            # 'flows': tf.constant(tf.zeros([self.n_links], dtype=tf.float64)),
             'alpha': self.bpr.parameters['alpha'].initial_value,
             'beta': self.bpr.parameters['beta'].initial_value,
             'q': self.od.initial_values_array(),
@@ -388,7 +395,7 @@ class GISUELOGIT(tf.keras.Model):
         # if self.endogenous_flows:
         self._flows = tf.Variable(
             initial_value=tf.math.sqrt(initial_values['flows']),
-            # initial_value=tf.constant(tf.zeros([self.n_hours,self.n_links]), dtype=tf.float64),
+            # initial_value=tf.constant(tf.zeros([self.n_timepoints,self.n_links]), dtype=tf.float64),
             trainable= trainables['flows'],
             name='flows',
             dtype=self.dtype)
@@ -461,7 +468,14 @@ class GISUELOGIT(tf.keras.Model):
             self._parameters['fixed_effects'] = self._fixed_effect
 
     def flows(self):
-        return tf.math.pow(self._flows, 2)
+        flows = tf.math.pow(self._flows, 2)
+
+        if self.n_periods>1:
+            flows =  tf.experimental.numpy.take(flows,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
+
+        return flows
+
+        # return flows
 
     @property
     def q(self):
@@ -554,8 +568,11 @@ class GISUELOGIT(tf.keras.Model):
 
         """ TODO: Make the einsum operation in one line"""
 
+        self.period_ids = X[:, :, -1]
+
         if tf.rank(self.theta) == 1:
-            return tf.einsum("ijkl,l -> ijk", X, self.theta[1:])+ self.theta[0]*self.traveltimes() + self.fixed_effect
+            # return tf.einsum("ijkl,l -> ijk", X, self.theta[1:])+ self.theta[0]*self.traveltimes() + self.fixed_effect
+            return self.theta[0] * self.traveltimes() + tf.einsum("ikl,l -> ik", X[:,:,:-1], self.theta[1:]) + self.fixed_effect
 
         return tf.einsum("ijkl,jl -> ijk", X, self.theta[:,1:]) + self.fixed_effect + self.theta[:,0]*self.traveltimes()
 
@@ -593,10 +610,16 @@ class GISUELOGIT(tf.keras.Model):
     def traveltimes(self):
         """ Return tensor variable associated to endogenous travel times (assumed dependent on link flows)"""
 
-        return self.bpr_traveltimes(x=self.flows())
+        traveltimes = self.bpr_traveltimes(x=self.flows())
+
+        return traveltimes
+
+        # return tf.experimental.numpy.take(traveltimes,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
+
 
     def path_utilities(self, V):
-        return self.path_size_correction(tf.einsum("ijk,kl -> ijl", V, self.D))
+        # return self.path_size_correction(tf.einsum("ijk,kl -> ijl", V, self.D))
+        return self.path_size_correction(tf.einsum("jk,kl -> jl", V, self.D))
 
     # def path_attributes(self, X):
     #     return tf.einsum("ijk,jl -> ilk", X, self.D)
@@ -617,7 +640,7 @@ class GISUELOGIT(tf.keras.Model):
         '''
 
         M_sparse = tf.cast(tf.sparse.from_dense(self.network.M), tf.float64)
-        M_sparse = tf.sparse.concat(0, [tf.sparse.expand_dims(M_sparse, 0)] * vf.shape[1])
+        # M_sparse = tf.sparse.concat(0, [tf.sparse.expand_dims(M_sparse, 0)] * vf.shape[1])
         M_sparse = tf.sparse.concat(0, [tf.sparse.expand_dims(M_sparse, 0)] * vf.shape[0])
 
         indices = M_sparse.indices
@@ -625,18 +648,29 @@ class GISUELOGIT(tf.keras.Model):
         V = tf.sparse.SparseTensor(indices=indices,
                                    # values = tf.exp(tf.reshape(vf,-1)),
                                    values=tf.reshape(vf, -1),
-                                   dense_shape=(vf.shape[0], vf.shape[1], *self.M.shape))
+                                   # dense_shape=(vf.shape[0], vf.shape[1], *self.M.shape)
+                                   dense_shape=(vf.shape[0], *self.M.shape)
+                                   )
 
         if normalization:
+            # normalized_values = V.values - tf.reshape(
+            #     tf.einsum("ijk,kl -> ijl", tf.stop_gradient(tf.sparse.reduce_max(V, axis=3)), self.M), -1)
+
+            # V = tf.sparse.SparseTensor(indices=indices, values=tf.exp(normalized_values),
+            #                            dense_shape=(vf.shape[0], vf.shape[1], *self.M.shape))
+
             normalized_values = V.values - tf.reshape(
-                tf.einsum("ijk,kl -> ijl", tf.stop_gradient(tf.sparse.reduce_max(V, axis=3)), self.M), -1)
+                tf.einsum("jk,kl -> jl", tf.stop_gradient(tf.sparse.reduce_max(V, axis=2)), self.M), -1)
+
             V = tf.sparse.SparseTensor(indices=indices, values=tf.exp(normalized_values),
-                                       dense_shape=(vf.shape[0], vf.shape[1], *self.M.shape))
+                                       dense_shape=(vf.shape[0], *self.M.shape))
 
         else:
             V = tf.sparse.map_values(tf.exp, V)
 
-        return tf.reshape(V.values, vf.shape) / tf.einsum("ijk,kl -> ijl", tf.sparse.reduce_sum(V, axis=3), self.M)
+        return tf.reshape(V.values, vf.shape) / tf.einsum("jk,kl -> jl", tf.sparse.reduce_sum(V, axis=2), self.M)
+
+        # return tf.reshape(V.values, vf.shape) / tf.einsum("ijk,kl -> ijl", tf.sparse.reduce_sum(V, axis=3), self.M)
 
         # return tf.exp(vf)/tf.einsum("ij,jk -> ik", tf.sparse.reduce_sum(V, axis=2), self.M)
 
@@ -657,19 +691,27 @@ class GISUELOGIT(tf.keras.Model):
         # TODO: Test and try to combine the einsums if possible to avoid ifelse clause
 
         if tf.rank(self.q) == 1:
-            return tf.einsum("ij,i, klj -> klj", self.M, self.q, pf)
+            return tf.einsum("ij,i, lj -> lj", self.M, self.q, pf)
+            # return tf.einsum("ij,i, klj -> klj", self.M, self.q, pf)
             # return tf.einsum("j,lij -> lij", tf.einsum("ij,i-> j", self.M, self.q), pf)
 
         # todo: have a single einsum, e.g. return tf.einsum("ij,ki, lkj -> lij", self.M, self.q, pf)
-        return tf.einsum("ij, lij -> lij", tf.einsum("ij,ki-> kj", self.M, self.q), pf)
+        # return tf.einsum("ij, lij -> lij", tf.einsum("ij,ki-> kj", self.M, self.q), pf)
+        od_flows = tf.einsum("ij,ki-> kj", self.M, self.q)
+        od_flows = tf.experimental.numpy.take(od_flows, tf.cast(self.period_ids[:, 0], dtype=tf.int32), 0)
+
+        return tf.einsum("ij, ij -> ij", od_flows, pf)
+
+        # return tf.einsum("ij, lij -> lij", tf.einsum("ij,ki-> kj", self.M, self.q), pf)
 
     def link_flows(self, f):
-        return tf.einsum("ijk,lk -> ijl", f, self.D)
+        return tf.einsum("jk,lk -> jl", f, self.D)
+        # return tf.einsum("ijk,lk -> ijl", f, self.D)
 
     @property
     def alpha(self):
 
-        # Without the exponential trick, the estimation of alpha is highly unstable.
+        # Without the exponential trick, the estimation of alpha is more unstable.
 
         # return tf.clip_by_value(self._alpha, self._epsilon, 1e10)
         # return tf.exp(self._alpha)
@@ -844,25 +886,31 @@ class GISUELOGIT(tf.keras.Model):
         loss = dict.fromkeys(list(lambdas_vals.keys()) + ['total'], tf.constant(0, dtype=tf.float64))
 
         if Y.shape[-1] > 0:
+
             self.observed_traveltimes, self.observed_flows = tf.unstack(Y,axis = -1)
 
             self.observed_traveltimes = self.mask_observed_traveltimes(tt = self.observed_traveltimes,
                                                                        k = np.array([link.bpr.k for link in self.network.links]))
+
+            self.period_ids = X[:, :, -1]
 
             # Under recurrent traffic conditions, we assume that the equilibrium flow and travel time is the same regardless the day  Thus, using self.flows() or self.traveltimes() is preferred.
             # predicted_flow = self.compute_link_flows(X)
             # predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
             # output_flow = predicted_flow
 
+            output_flow = self.compute_link_flows(X)
             predicted_flow = self.flows()
             predicted_traveltimes = self.traveltimes()
-            output_flow = self.compute_link_flows(X)
+
 
             # np.nanmean(self.observed_traveltimes)
             # np.nanmean(predicted_traveltimes)
 
             loss = {
-                'od': loss_metric(actual=tf.constant(self.od.historic_values[1].flatten()),
+                # 'od': loss_metric(actual=tf.constant(self.od.historic_values[1].flatten()),
+                #                   predicted=self.q),
+                'od': loss_metric(actual=tf.constant(self.od.historic_values_array),
                                   predicted=self.q),
                 'flow': loss_metric(actual=self.observed_flows, predicted=predicted_flow),
                 # 'flow': loss_metric(actual=self.observed_flows, predicted=output_flow),
@@ -947,6 +995,7 @@ class GISUELOGIT(tf.keras.Model):
         estimates.update(dict(zip(self.utility.features, self.theta.numpy().flatten())))
         estimates.update(dict(zip(['alpha', 'beta'], [np.mean(self.alpha.numpy()), np.mean(self.beta.numpy())])))
         estimates['psc_factor'] = float(self.psc_factor.numpy())
+        estimates['fixed_effect'] = np.mean(self.fixed_effect.numpy())
 
         return pd.DataFrame(estimates, index=[0])
 
@@ -975,11 +1024,11 @@ class GISUELOGIT(tf.keras.Model):
     def train(self,
               X_train: tf.constant,
               Y_train: tf.constant,
-              X_val: tf.constant,
-              Y_val: tf.constant,
-              optimizer: tf.keras.optimizers,
-              loss_weights: Dict[str, float],
-              epochs: Dict[str, int],
+              X_val: tf.constant = None,
+              Y_val: tf.constant = None,
+              optimizer: tf.keras.optimizers = None,
+              loss_weights: Dict[str, float]  = None,
+              epochs: Dict[str, int] = None,
               initial_values: Dict[str, float] = None,
               trainables: Dict[str, bool] = None,
               threshold_relative_gap: float = 1e-4,
@@ -999,21 +1048,35 @@ class GISUELOGIT(tf.keras.Model):
         if generalization_error is None:
             generalization_error = {'train': False, 'validation': False}
 
-        X_train, Y_train, X_val, Y_val = map(lambda x: tf.cast(x,tf.float64),[X_train, Y_train, X_val, Y_val])
+        X_train, Y_train = map(lambda x: tf.cast(x, tf.float64), [X_train, Y_train])
 
-        self.n_days, self.n_hours, self.n_links, self.n_features = X_train.shape
+        if X_val is not None and Y_val is not None:
+            X_val, Y_val = map(lambda x: tf.cast(x,tf.float64),[X_val, Y_val])
+
+        self.n_days, self.n_links, self.n_features = X_train.shape
+        # self.periods =
+
+        self.period_ids = X_train[:, :, -1]
 
         self.create_tensor_variables(initial_values = initial_values, trainables=trainables)
 
+        # Initialization of endogenous travel times and flows
         if np.sum(self.flows().numpy()) == 0:
-            # Initialization of endogenous travel times and flows
+
             predicted_flow = self.compute_link_flows(X_train)
             predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
 
             # if self.endogenous_flows:
             # Smart initialization is performed running a single pass of traffic assignment under initial theta and q
             # self._flows.assign(tf.math.sqrt(tf.reduce_mean(predicted_flow,axis = 0)))
-            self._flows.assign(tf.math.sqrt(predicted_flow))
+
+            if self.n_periods>1:
+                predicted_flow = tf.concat([tf.expand_dims(tf.reduce_mean(link_flows,axis = 0),axis = 0) for link_flows in self.split_link_flows_by_period(predicted_flow)],axis =0)
+
+                self._flows.assign(tf.math.sqrt(predicted_flow))
+
+            else:
+                self._flows.assign(tf.math.sqrt(tf.expand_dims(tf.reduce_mean(predicted_flow, axis = 0),axis = 0)))
             # self._flows.assign(tf.squeeze(tf.reduce_mean(self.call(tf.unstack(Y_train,axis = -1)[1]),axis=-1)))
 
             if self.endogenous_traveltimes:
@@ -1032,14 +1095,15 @@ class GISUELOGIT(tf.keras.Model):
         # Initial Losses
         # train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights)['loss_total']
         # val_loss = self.loss_function(X=X_val, Y=Y_val, loss_weights=loss_weights)['total']
-
-        train_losses, val_losses = [], []
-
         estimates = [self.get_parameters_estimates()]
 
         # MSE is keep here regardless the selected loss metric so it is printed the true loss
         train_losses = [self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights, loss_metric=mse)]
-        val_losses = [self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse)]
+
+        if X_val is not None and Y_val is not None:
+            val_losses = [self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse)]
+        else:
+            val_losses = [{k: 0*v for k, v in train_losses[0].items()}]
 
         relative_gaps = [threshold_relative_gap]
         terminate_algorithm = False
@@ -1058,19 +1122,21 @@ class GISUELOGIT(tf.keras.Model):
             current_sue_objectives = []
 
             if not terminate_algorithm:
-
                 path_flows = self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X_train))))
                 link_flow = self.link_flows(path_flows)
                 relative_x = float(np.nanmean(np.abs(tf.divide(link_flow,self.flows()) - 1)))
 
                 for i in range(X_train.shape[0]):
 
-                    sue_objective = sue_objective_function_fisk(f = path_flows[i,0,:].numpy().flatten(),
-                                                                X = X_train[i, 0, :, :],
-                                                                theta = dict(zip(self.utility.features,self.theta.numpy())),
-                                                                k_Z = self.utility.features_Z,
-                                                                k_Y= self.utility.features_Y,
-                                                                network = self.network)
+                    sue_objective = sue_objective_function_fisk(
+                        # f = path_flows[i,0,:].numpy().flatten(),
+                        f=path_flows[i, :].numpy().flatten(),
+                        # X = X_train[i, 0, :, :],
+                        X=X_train[i, :, :],
+                        theta = dict(zip(self.utility.features,self.theta.numpy())),
+                        k_Z = self.utility.features_Z,
+                        k_Y= self.utility.features_Y,
+                        network = self.network)
 
                     current_sue_objectives.append(sue_objective)
 
@@ -1086,7 +1152,7 @@ class GISUELOGIT(tf.keras.Model):
 
                 if generalization_error.get('train', False):
                     train_losses[-1]['generalization_error'] = self.generalization_error(X=X_train, Y=Y_train)
-                if generalization_error.get('validation', False):
+                if X_val is not None and Y_val is not None and generalization_error.get('validation', False):
                     val_losses[-1]['generalization_error'] = self.generalization_error(X=X_val, Y=Y_val)
 
             if epoch == epochs['learning'] or abs(relative_gaps[-1]) < threshold_relative_gap:
@@ -1094,7 +1160,10 @@ class GISUELOGIT(tf.keras.Model):
 
             if epoch % epochs_print_interval == 0 or epoch == 1 or terminate_algorithm:
 
-                print(f"\nEpoch: {epoch}, n_train: {X_train.shape[0]}, n_test: {X_val.shape[0]}")
+                print(f"\nEpoch: {epoch}/{epochs['learning']}, n_train: {X_train.shape[0]}", end = "")
+
+                if X_val is not None:
+                    print(f", n_test: {X_val.shape[0]}")
 
                 print(f"\n{epoch}: train_loss={float(train_losses[-1]['loss_total'].numpy()):0.2g}, "
                     f"val_loss={float(val_losses[-1]['loss_total'].numpy()):0.2g}, "
@@ -1107,7 +1176,7 @@ class GISUELOGIT(tf.keras.Model):
                     f"theta = {self.theta.numpy()}, "
                     f"vot = {np.array(compute_vot(self.get_parameters_estimates().to_dict(orient='records')[0])):0.2f}, "
                     f"psc_factor = {self.psc_factor.numpy()}, "
-                    f"avg abs theta fixed effect = {np.mean(np.abs(self.fixed_effect)):0.2g}, "
+                    f"avg theta fixed effect = {np.mean(self.fixed_effect):0.2g}, "
                     f"avg alpha={np.mean(self.alpha.numpy()):0.2g}, avg beta={np.mean(self.beta.numpy()):0.2g}, "
                     # f"avg abs diff demand ={np.nanmean(np.abs(self.q - self.historic_od(self.q))):0.2g}, ",end = '')
                     f"loss demand={float(train_losses[-1]['loss_od'].numpy()):0.2g}, "
@@ -1172,7 +1241,13 @@ class GISUELOGIT(tf.keras.Model):
 
                 # Store losses and estimates
                 train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights, loss_metric=mse)
-                val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse)
+
+
+                if X_val is not None and Y_val is not None:
+                    val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse)
+
+                else:
+                    val_loss = {k: 0*v for k, v in train_loss.items()}
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)
@@ -1229,6 +1304,12 @@ class GISUELOGIT(tf.keras.Model):
 
             train_results_eq['epoch'] += train_results_df['epoch'].max()
             val_results_eq['epoch'] += val_results_df['epoch'].max()
+
+            train_results_df['stage'] ='learning'
+            val_results_df['stage'] = 'learning'
+
+            train_results_eq['stage'] = 'equilibrium'
+            val_results_eq['stage'] = 'equilibrium'
 
             # for i in ['loss_flow','loss_tt','loss_total','loss_eq_flow']:
             #     train_results_eq[i] *= train_results_df.iloc[-1,:][i]
@@ -1288,16 +1369,27 @@ class GISUELOGIT(tf.keras.Model):
         train_results_eq, val_results_eq = suelogit.train(
            **kwargs, loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'eq_flow': 1})
 
-        return  train_results_eq, val_results_eq
+        return train_results_eq, val_results_eq
 
 
+    def split_link_flows_by_period(self, link_flows):
+
+        link_flows_period = [tf.experimental.numpy.take(link_flows, (self.period_ids[:, 0] == k).numpy().astype(int), 0)
+                             for k in
+                             np.unique(self.period_ids[:, 0])]
+
+        return link_flows_period
 
     def compute_link_flows(self,X):
 
+        self.period_ids = X[:, :, -1]
+
         link_flows = self.link_flows(self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X)))))
 
-        if tf.rank(link_flows) == 3:
-            link_flows = tf.reduce_mean(link_flows,axis = 0)
+        # if tf.rank(link_flows) == 2:
+        #     return self.split_link_flows_period(link_flows)
+
+        # return tf.reduce_mean(link_flows,axis = 0)
 
         return link_flows
 
@@ -1306,7 +1398,7 @@ class GISUELOGIT(tf.keras.Model):
         """
         X: tensor of link features of dimension (n_daus, n_hours, n_links, n_features)
 
-        return tensor of dimension (n_days, n_links)
+        return tensor of dimension (n_timepoints, n_links)
         """
 
         return self.compute_link_flows(X)
@@ -1356,7 +1448,7 @@ def sue_objective_function_fisk(f,
             # Zx_vector = np.array(list(network.Z_data[attr]))[:, np.newaxis]
             # Z_utility_integral += float(theta[attr]) * Zx_vector.T.dot(x_vector)
 
-    Z_utility_integral = X.numpy().T.dot(x_vector).dot(np.array([theta[k_z] for k_z in k_Z]).T)
+    Z_utility_integral = X[:,:-1].numpy().T.dot(x_vector).dot(np.array([theta[k_z] for k_z in k_Z]).T)
 
     # Objective function in multiattribute problem
     utility_integral = tt_utility_integral + float(Z_utility_integral)
@@ -1397,10 +1489,10 @@ class AETSUELOGIT(GISUELOGIT):
 
             self._traveltimes = tf.Variable(
                 # initial_value=tf.math.sqrt(tf.constant(tf.zeros(self.n_links, dtype=tf.float64))),
-                initial_value=tf.tile(tf.expand_dims(self.tt_ff, 0), tf.constant([self.n_hours, 1])),
-                # initial_value=tf.math.sqrt(tf.tile(tf.expand_dims(self.tt_ff,0),tf.constant([self.n_hours,1]))),
+                initial_value=tf.tile(tf.expand_dims(self.tt_ff, 0), tf.constant([self.n_periods, 1])),
+                # initial_value=tf.math.sqrt(tf.tile(tf.expand_dims(self.tt_ff,0),tf.constant([self.n_timepoints,1]))),
                 # initial_value=tf.math.sqrt(tf.tile(tf.constant(self.tt_ff[tf.newaxis,tf.newaxis,:]),
-                #                                    tf.constant([self.n_days, self.n_hours,1]))),
+                #                                    tf.constant([self.n_timepoints, self.n_timepoints,1]))),
                 trainable= self.endogenous_traveltimes,
                 name='traveltimes',
                 dtype=self.dtype)
@@ -1432,7 +1524,7 @@ class AETSUELOGIT(GISUELOGIT):
 
         X: tensor of link features of dimension (n_daus, n_hours, n_links, n_features)
 
-        return matrix of dimension (n_days, n_links)
+        return matrix of dimension (n_timepoints, n_links)
         """
 
         return self.bpr_traveltimes(self.compute_link_flows(X))
@@ -1463,7 +1555,7 @@ class ODLUE(GISUELOGIT):
 
     def call(self, X):
         """
-        X is tensor of dimension (n_days, n_hours, n_links, n_features)
+        X is tensor of dimension (n_timepoints, n_hours, n_links, n_features)
         """
 
         return self.compute_link_flows(X)

@@ -47,6 +47,71 @@ def plot_convergence_estimates(estimates: pd.DataFrame,
 
     return fig, ax
 
+def plot_predictive_performance(train_losses: pd.DataFrame,
+                                val_losses: pd.DataFrame = None,
+                                xticks_spacing: int = 5,
+                                show_validation = False,
+                                **kwargs) -> None:
+
+    fig, ax = plt.subplots(figsize = (5,4))
+
+    ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
+
+    ax.plot(train_losses['epoch'], train_losses['loss_tt'], label="Travel times", color='red',
+            linestyle='-')
+    ax.plot(train_losses['epoch'], train_losses['loss_flow'], label="Link flows", color='blue',
+            linestyle='-')
+    ax.plot(train_losses['epoch'], train_losses['loss_eq_flow'], label="Equilibrium", color='gray',
+            linestyle='-')
+    # ax.plot(train_losses['epoch'], train_losses['loss_od'], label="OD loss", color='green', linestyle='-')
+
+    if show_validation:
+
+        ax.plot(train_losses['epoch'], train_losses['loss_tt'], label="Travel times (train)", color='red',
+                linestyle='-')
+        ax.plot(train_losses['epoch'], train_losses['loss_flow'], label="Link flows (train)", color='blue',
+                linestyle='-')
+        ax.plot(train_losses['epoch'], train_losses['loss_eq_flow'], label="Equilibrium (train)", color='gray',
+                linestyle='-')
+        # ax.plot(train_losses['epoch'], train_losses['loss_od'], label="OD loss (train)", color='green', linestyle='-')
+
+        ax.plot(val_losses['epoch'], val_losses['loss_tt'], label="Travel times (test)", color='red',linestyle='--')
+        ax.plot(val_losses['epoch'], val_losses['loss_flow'], label="Link flows (test)", color='blue', linestyle='--')
+        ax.plot(val_losses['epoch'], val_losses['loss_eq_flow'], label="Equilibrium (test)", color='gray',
+                linestyle='--')
+
+        # ax.plot(val_losses['epoch'], val_losses['loss_od'], label="OD loss (test)", color='green', linestyle='--')
+
+    if 'generalization_error' in train_losses.keys():
+        plt.plot(train_losses['epoch'], train_losses['generalization_error'], label="Train loss (generalization)",
+                 color='black', linestyle='-')
+    if show_validation and 'generalization_error' in val_losses.keys():
+        plt.plot(val_losses['epoch'], val_losses['generalization_error'], label="Test loss (generalization)",
+                 color='black', linestyle='--')
+
+    # https://stackoverflow.com/questions/5484922/secondary-axis-with-twinx-how-to-add-to-legend
+    plt.xticks(np.arange(train_losses['epoch'].min(), train_losses['epoch'].max() + 1, xticks_spacing))
+    plt.xlim(xmin=train_losses['epoch'].min(), xmax=train_losses['epoch'].max())
+
+    # plt.ylim(ymin=0, ymax=100)
+    plt.ylim(ymin=0)
+    plt.xlabel('epoch')
+
+    # ax.set_ylabel('loss')
+    ax.set_ylabel('relative loss (%)')
+    # ax.set_ylabel('change in equilibrium metric (%)')
+
+    # ax1.legend(loc = 0)
+    # ax2.legend(loc = 1)
+    plt.legend(loc = "upper right", bbox_to_anchor=(1,1), bbox_transform=ax.transAxes, prop={'size': 10})
+
+    # fig.show()
+
+    # ax.grid(False)
+
+    # plt.legend(prop={'size': 8})
+
+    return fig, ax
 
 def plot_predictive_performance_twoaxes(train_losses: pd.DataFrame,
                                 val_losses: pd.DataFrame) -> None:
@@ -89,61 +154,6 @@ def plot_predictive_performance_twoaxes(train_losses: pd.DataFrame,
     plt.legend(loc = "upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
 
     fig.show()
-
-def plot_predictive_performance(train_losses: pd.DataFrame,
-                                val_losses: pd.DataFrame,
-                                xticks_spacing: int = 5,
-                                **kwargs) -> None:
-
-    fig, ax = plt.subplots(figsize = (5,4))
-
-    ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
-
-    ax.plot(train_losses['epoch'], train_losses['loss_tt'], label="Travel time loss (train)", color='red', linestyle='-')
-    ax.plot(val_losses['epoch'], val_losses['loss_tt'], label="Travel time loss (test)", color='red',linestyle='--')
-    ax.plot(train_losses['epoch'], train_losses['loss_flow'], label="Link flow loss (train)", color='blue', linestyle='-')
-    ax.plot(val_losses['epoch'], val_losses['loss_flow'], label="Link flow loss (test)", color='blue', linestyle='--')
-    # ax.plot(train_losses['epoch'], train_losses['loss_od'], label="Train loss (od)", color='green', linestyle='-')
-    # ax.plot(val_losses['epoch'], val_losses['loss_od'], label="Test loss (od)", color='green', linestyle='--')
-
-    # plt.plot(train_losses['epoch'], train_losses['loss_bpr'], label="Train loss (bpr)", color='gray', linestyle='-')
-    # plt.plot(val_losses['epoch'], val_losses['loss_bpr'], label="Test loss (bpr)", color='gray',
-    #          linestyle='--')
-
-    ax.plot(train_losses['epoch'], train_losses['loss_eq_flow'], label="Equilibrium loss (train)", color='gray', linestyle='-')
-    ax.plot(val_losses['epoch'], val_losses['loss_eq_flow'], label="Equilibrium loss (test)", color='gray', linestyle='--')
-
-    if 'generalization_error' in train_losses.keys():
-        plt.plot(train_losses['epoch'], train_losses['generalization_error'], label="Train loss (generalization)",
-                 color='black', linestyle='-')
-    if 'generalization_error' in val_losses.keys():
-        plt.plot(val_losses['epoch'], val_losses['generalization_error'], label="Test loss (generalization)",
-                 color='black', linestyle='--')
-
-    # https://stackoverflow.com/questions/5484922/secondary-axis-with-twinx-how-to-add-to-legend
-    plt.xticks(np.arange(train_losses['epoch'].min(), train_losses['epoch'].max() + 1, xticks_spacing))
-    plt.xlim(xmin=train_losses['epoch'].min(), xmax=train_losses['epoch'].max())
-
-    # plt.ylim(ymin=0, ymax=100)
-    plt.ylim(ymin=0)
-    plt.xlabel('epoch')
-
-    # ax.set_ylabel('loss')
-    ax.set_ylabel('relative loss (%)')
-    # ax.set_ylabel('change in equilibrium metric (%)')
-
-    # ax1.legend(loc = 0)
-    # ax2.legend(loc = 1)
-    plt.legend(loc = "upper right", bbox_to_anchor=(1,1), bbox_transform=ax.transAxes, prop={'size': 10})
-
-    # fig.show()
-
-    # ax.grid(False)
-
-    # plt.legend(prop={'size': 8})
-
-    return fig, ax
-
 
 
 def plot_levels_experiment(results: pd.DataFrame,
