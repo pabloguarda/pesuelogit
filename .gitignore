@@ -149,3 +149,9 @@ examples/scripts/extra-gps/
 
 # Input
 input/private
+
+#Output
+output/tables/*
+!output/tables/.gitkeep
+
+!/examples/notebooks/backup/
