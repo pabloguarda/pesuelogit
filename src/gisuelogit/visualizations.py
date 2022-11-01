@@ -8,6 +8,7 @@ import numpy as np
 from isuelogit.estimation import compute_vot
 from typing import Union, Dict, List, Tuple
 from isuelogit.mytypes import Matrix
+from .models import compute_rr
 
 
 
@@ -231,6 +232,64 @@ def plot_levels_experiment(results: pd.DataFrame,
 
 
     # self.save_fig(fig, folder, 'inference_summary')
+
+
+def plot_top_od_flows_periods(model, df, period_feature, top_k = 10):
+
+    """
+    Plot top od pairs according to the variation of the od flows over time periods
+    """
+
+
+    period_keys = df[[period_feature, 'period_id']].drop_duplicates()
+
+    q_df = pd.DataFrame({})
+    for i, j in zip(range(model.q.shape[0]), list(period_keys[period_feature])):
+        # q_dict = dict(zip(fresno_network.ods, list(tvodlulpe.q[i].numpy())))
+        q_dict = dict(zip(model.triplist, list(model.q[i].numpy())))
+        q_df = q_df.append(pd.DataFrame(q_dict, index=[j]))
+
+    top_q = q_df[q_df.var().sort_values(ascending=False)[0:top_k].index].sort_index()
+
+    sns.heatmap(top_q.transpose(), linewidth=0.5, cmap="Blues", vmin=0)
+
+    plt.xlabel(period_feature, fontsize=12)
+    plt.ylabel('od pair', fontsize=12)
+
+    return top_q
+
+def plot_utility_parameters_periods(model, df, period_feature, include_vot = False):
+
+    period_keys = df[[period_feature, 'period_id']].drop_duplicates()
+
+    theta_df = pd.DataFrame({})
+    for i,j in zip(range(model.theta.shape[0]),list(period_keys[period_feature])):
+        theta_dict = dict(zip(model.utility.features, list(model.theta[i].numpy())))
+
+        if include_vot:
+            theta_dict['vot'] = float(compute_rr(theta_dict))
+
+        theta_df = theta_df.append(pd.DataFrame(theta_dict, index=[j]))
+
+    if include_vot:
+        theta_df[theta_df['vot'].isna()] = 0
+
+    theta_df = theta_df.sort_index()
+
+    cols = theta_df.columns
+    theta_df[cols] = theta_df[cols].apply(pd.to_numeric, errors='coerce')
+
+    cmap = sns.diverging_palette(10, 133, as_cmap=True)
+    bound = np.nanmax(theta_df.abs().values)
+
+    sns.heatmap(theta_df.transpose(), linewidth=0.5, cmap=cmap,
+                vmin = -bound, vmax = bound)
+
+    plt.xlabel(period_feature, fontsize=12)
+    plt.ylabel('parameter', fontsize=12)
+
+    return theta_df
+
 
 
 def plot_heatmap_demands(Qs: Dict[str, Matrix],
