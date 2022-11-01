@@ -155,3 +155,5 @@ input/private
 !output/tables/.gitkeep
 
 /examples/notebooks/backup/
+/input/network-data/fresno/links/backup/
+/output/network-data/fresno/links/*
