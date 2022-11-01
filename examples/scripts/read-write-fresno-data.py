@@ -307,6 +307,19 @@ for date, hour in itertools.product(dates, hours):
     #                                                 'selected_date'] + '.shp'
     #                                             )
 
+
+# Run this command only once to consolidate all csv files into a single file that it uploaded to github repo
+read_folderpath = 'output/network-data/fresno/links/'
+df = pd.concat([pd.read_csv(file) for file in glob.glob(read_folderpath + "*fresno-link-data*")], axis=0)
+
+write_folderpath = isl.config.dirs['read_network_data'] + 'links/spatiotemporal-data/'
+
+df.to_csv(str(os.getcwd()) + '/' + write_folderpath + 'fresno-spatiotemporal-link-data.csv.gz',
+           index=False,
+           compression="gzip")
+
+print('consolidated file has been written')
+
 sys.exit()
 
 # =============================================================================
