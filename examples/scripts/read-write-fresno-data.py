@@ -128,7 +128,9 @@ isl.config.dirs['read_network_data'] = isl.config.dirs['input_folder'] + "networ
 filespath = isl.config.dirs['input_folder'] + "private/Fresno/inrix/speed/by-day"
 
 dates = [os.path.splitext(os.path.basename(file))[0] for file in glob.glob(filespath + '/*.csv')]
-hours = [16, 17, 18]
+# hours = [16, 17, 18]
+
+hours = range(6,21)
 
 lwrlk_only = True
 
