@@ -61,9 +61,9 @@ load_k_shortest_paths(network=fresno_network, k=2, update_incidence_matrices=Tru
 
 ## Read spatiotemporal data
 folderpath = isl.config.dirs['read_network_data'] + 'links/spatiotemporal-data/'
-df = pd.concat([pd.read_csv(file) for file in glob.glob(folderpath + "*fresno-link-data*")], axis=0)
+df = pd.concat([pd.read_csv(file) for file in glob.glob(folderpath + "*link-data*")], axis=0)
 # df.hour.unique()
-#
+
 # TODO: Check why there are missing dates, e.g. October 1, 2019
 df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
 
