@@ -12,7 +12,7 @@ from tensorflow import keras
 from typing import Dict, List, Tuple, Union
 import time
 from .networks import Equilibrator, ColumnGenerator, TransportationNetwork
-from isuelogit.estimation import Parameter, compute_vot
+from isuelogit.estimation import Parameter
 from .descriptive_statistics import error, mse, rmse, nrmse, btcg_mse, mnrmse,l1norm
 
 
@@ -141,8 +141,8 @@ class Parameters(isl.estimation.UtilityFunction):
         if features is not None:
             values_list = [self.initial_values[feature] for feature in features]
 
-        if self.n_periods == 1:
-            return np.array(list(values_list))
+        # if self.n_periods == 1:
+        #     return np.array(list(values_list))
 
         return np.repeat(np.array(values_list)[np.newaxis, :], self.n_periods, axis=0)
 
@@ -201,7 +201,7 @@ class BPRParameters(Parameters):
         super().__init__(keys=keys, *args, **kwargs)
 
 
-class ODParameters(Parameters):
+class   ODParameters(Parameters):
     """ Support OD with multiple periods """
 
     def __init__(self,
@@ -327,7 +327,7 @@ class GISUELOGIT(tf.keras.Model):
         self.period_ids = None
 
         self.utility = utility
-        # self.utility.n_periods = n_periods
+        self.utility.n_periods = n_periods
         self.od = od
         self.od.n_periods = n_periods
 
@@ -377,7 +377,7 @@ class GISUELOGIT(tf.keras.Model):
             'alpha': self.bpr.parameters['alpha'].initial_value,
             'beta': self.bpr.parameters['beta'].initial_value,
             'q': self.od.initial_values_array(),
-            'theta': self.utility.initial_values,
+            'theta': self.utility.initial_values_array(self.utility.features),
             'psc_factor':self.utility.initial_values['psc_factor'],
             'fixed_effect': tf.constant(self.utility.initial_values['fixed_effect'],
                                         shape=tf.TensorShape(self.utility.shapes['fixed_effect']), dtype=tf.float64)
@@ -441,11 +441,15 @@ class GISUELOGIT(tf.keras.Model):
 
             self._theta = []
 
-            for feature in self.utility.features:
-                self._theta.append(tf.Variable(initial_value= initial_values['theta'][feature],
-                                               trainable=trainables['theta'][feature],
-                                               name=feature,
-                                               dtype=self.dtype))
+            for i, feature in enumerate(self.utility.features):
+                self._theta.append(
+                    tf.Variable(
+                        # initial_value= initial_values['theta'][feature],
+                        initial_value= tf.cast(initial_values['theta'][:,i],tf.float64),
+                        trainable=trainables['theta'][feature],
+                        name=feature,
+                        dtype=self.dtype)
+                )
 
             self._parameters['theta'] = self._theta
         if keys.get('psc_factor', False):
@@ -483,9 +487,15 @@ class GISUELOGIT(tf.keras.Model):
 
     @property
     def Q(self):
+
+        q = self.q
+
+        if tf.rank(self.q) == 2:
+            q = tf.reduce_mean(self.q, axis = 0)
+
         return tf.SparseTensor(
             indices=self.triplist,
-            values=self.q,
+            values=q,
             dense_shape=(self.n_nodes, self.n_nodes)
         )
 
@@ -522,7 +532,12 @@ class GISUELOGIT(tf.keras.Model):
 
     @property
     def theta(self):
-        return self.project_theta(tf.stack(self._theta))
+        theta = self.project_theta(tf.stack(self._theta,axis = 1))
+
+        # if self.n_periods>1:
+        #     theta = tf.experimental.numpy.take(theta,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
+        #
+        return theta
 
     @property
     def D(self):
@@ -569,13 +584,14 @@ class GISUELOGIT(tf.keras.Model):
         """ TODO: Make the einsum operation in one line"""
 
         self.period_ids = X[:, :, -1]
+        theta = tf.experimental.numpy.take(self.theta,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
 
-        if tf.rank(self.theta) == 1:
+        if tf.rank(theta) == 1:
             # return tf.einsum("ijkl,l -> ijk", X, self.theta[1:])+ self.theta[0]*self.traveltimes() + self.fixed_effect
-            return self.theta[0] * self.traveltimes() + tf.einsum("ikl,l -> ik", X[:,:,:-1], self.theta[1:]) + self.fixed_effect
+            return theta[0] * self.traveltimes() + tf.einsum("ikl,l -> ik", X[:,:,:-1], theta[1:]) + self.fixed_effect
 
-        return tf.einsum("ijkl,jl -> ijk", X, self.theta[:,1:]) + self.fixed_effect + self.theta[:,0]*self.traveltimes()
-
+        return self.traveltimes()*tf.expand_dims(theta[:,0],1) \
+               + tf.einsum("ijk,ik -> ij", X[:,:,:-1], theta[:,1:]) + self.fixed_effect
 
     def mask_predicted_traveltimes(self,x,k, k_threshold = 1e5):
 
@@ -990,9 +1006,11 @@ class GISUELOGIT(tf.keras.Model):
 
     def get_parameters_estimates(self) -> pd.DataFrame:
 
+
+
         # TODO: extend for multiperiod theta and multilinks alpha, beta
         estimates = {}
-        estimates.update(dict(zip(self.utility.features, self.theta.numpy().flatten())))
+        estimates.update(dict(zip(self.utility.features, np.mean(self.theta.numpy(),axis = 0))))
         estimates.update(dict(zip(['alpha', 'beta'], [np.mean(self.alpha.numpy()), np.mean(self.beta.numpy())])))
         estimates['psc_factor'] = float(self.psc_factor.numpy())
         estimates['fixed_effect'] = np.mean(self.fixed_effect.numpy())
@@ -1003,8 +1021,11 @@ class GISUELOGIT(tf.keras.Model):
 
         true_values = {k: v for k, v in {**self.bpr.true_values, **self.utility.true_values}.items()}
 
-        if {'c', 'tt'}.issubset(true_values.keys()):
-            true_values['vot'] = compute_vot(true_values)
+        # if {'c', 'tt'}.issubset(true_values.keys()):
+        #     true_values['vot'] = compute_rr(true_values)
+
+        if {'tt_sd', 'tt'}.issubset(true_values.keys()):
+            true_values['rr'] = compute_rr(true_values)
 
         return pd.DataFrame({'parameter': true_values.keys(), 'truth': true_values.values()})
 
@@ -1125,15 +1146,15 @@ class GISUELOGIT(tf.keras.Model):
                 path_flows = self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X_train))))
                 link_flow = self.link_flows(path_flows)
                 relative_x = float(np.nanmean(np.abs(tf.divide(link_flow,self.flows()) - 1)))
+                theta = tf.experimental.numpy.take(self.theta, tf.cast(self.period_ids[:, 0], dtype=tf.int32), 0)
 
                 for i in range(X_train.shape[0]):
-
                     sue_objective = sue_objective_function_fisk(
                         # f = path_flows[i,0,:].numpy().flatten(),
                         f=path_flows[i, :].numpy().flatten(),
                         # X = X_train[i, 0, :, :],
                         X=X_train[i, :, :],
-                        theta = dict(zip(self.utility.features,self.theta.numpy())),
+                        theta = dict(zip(self.utility.features,theta[i])),
                         k_Z = self.utility.features_Z,
                         k_Y= self.utility.features_Y,
                         network = self.network)
@@ -1160,7 +1181,7 @@ class GISUELOGIT(tf.keras.Model):
 
             if epoch % epochs_print_interval == 0 or epoch == 1 or terminate_algorithm:
 
-                print(f"\nEpoch: {epoch}/{epochs['learning']}, n_train: {X_train.shape[0]}", end = "")
+                print(f"\nEpoch: {epoch}/{epochs['learning']}, n_periods: {self.n_periods},  n_train: {X_train.shape[0]}", end = "")
 
                 if X_val is not None:
                     print(f", n_test: {X_val.shape[0]}")
@@ -1173,8 +1194,9 @@ class GISUELOGIT(tf.keras.Model):
                     f"val_loss flow={float(val_losses[-1]['loss_flow'].numpy()):0.2g}, "
                     # f"train_loss bpr={float(train_loss['loss_bpr'].numpy()):0.2g}, "
                     # f"val_loss bpr={float(val_loss['loss_bpr'].numpy()):0.2g}, "
-                    f"theta = {self.theta.numpy()}, "
-                    f"vot = {np.array(compute_vot(self.get_parameters_estimates().to_dict(orient='records')[0])):0.2f}, "
+                    # f"theta = {np.round(np.unique(self.theta.numpy(),axis =0),3)}, "
+                    f"theta = {np.round(np.mean(self.theta.numpy(),axis =0),3)}, "
+                    f"avg rr = {np.array(compute_rr(self.get_parameters_estimates().to_dict(orient='records')[0])):0.2f}, "
                     f"psc_factor = {self.psc_factor.numpy()}, "
                     f"avg theta fixed effect = {np.mean(self.fixed_effect):0.2g}, "
                     f"avg alpha={np.mean(self.alpha.numpy()):0.2g}, avg beta={np.mean(self.beta.numpy()):0.2g}, "
@@ -1339,7 +1361,8 @@ class GISUELOGIT(tf.keras.Model):
             # column_generator=column_generator,
             utility=self.utility,
             bpr=self.bpr,
-            od=self.od
+            od=self.od,
+            n_periods = self.n_periods
         )
 
         trainables = {'flows': True,
@@ -1351,8 +1374,10 @@ class GISUELOGIT(tf.keras.Model):
                       }
 
         initial_values = {'flows': self.flows(),
-                          'theta': {parameter.name[:-2]: float(parameter)
-                                    for parameter in self._parameters['theta']},
+                          # 'theta': {parameter.name[:-2]: parameter
+                          #           for parameter in self._parameters['theta']},
+                          'theta': tf.concat([tf.expand_dims(parameter,1)
+                                    for parameter in self._parameters['theta']],axis = 1),
                           'alpha': self.alpha,
                           'beta': self.beta,
                           'q': self.q,
@@ -1402,6 +1427,26 @@ class GISUELOGIT(tf.keras.Model):
         """
 
         return self.compute_link_flows(X)
+
+def compute_ratio(parameters: Dict,
+                numerator_feature,
+                denominator_feature):
+    if denominator_feature in parameters:
+
+        if parameters[denominator_feature] != 0:
+            return parameters[numerator_feature] / parameters[denominator_feature]
+        else:
+            return float('nan')
+
+    else:
+        return float('nan')
+
+
+def compute_rr(parameters: Dict,
+               numerator_feature='tt_sd',
+               denominator_feature='tt'):
+
+    return compute_ratio(parameters, numerator_feature, denominator_feature)
 
 def almost_zero(array: np.array, tol = 1e-5):
     array[np.abs(array) < tol] = 0

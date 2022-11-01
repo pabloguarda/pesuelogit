@@ -3,7 +3,7 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 
-plt.ion()
+plt.ioff()
 
 import random
 import numpy as np
@@ -15,8 +15,8 @@ from sklearn import preprocessing
 from datetime import datetime
 
 # Internal modules
-from src.gisuelogit.visualizations import plot_predictive_performance, plot_heatmap_demands, plot_convergence_estimates
-from src.gisuelogit.models import UtilityParameters, GISUELOGIT, AETSUELOGIT, NGD, BPRParameters, ODParameters
+from src.gisuelogit.visualizations import plot_predictive_performance, plot_heatmap_demands, plot_convergence_estimates, plot_top_od_flows_periods, plot_utility_parameters_periods
+from src.gisuelogit.models import UtilityParameters, GISUELOGIT, AETSUELOGIT, NGD, BPRParameters, ODParameters, compute_rr
 from src.gisuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator, ColumnGenerator
 from src.gisuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data, add_period_id
 from src.gisuelogit.descriptive_statistics import mse, btcg_mse, mnrmse
@@ -48,7 +48,7 @@ load_k_shortest_paths(network=tntp_network, k=2, update_incidence_matrices=True)
 df = pd.read_csv(
     main_dir + '/output/network-data/' + tntp_network.key + '/links/' + tntp_network.key + '-link-data.csv')
 
-features_Z = ['c', 's']
+features_Z = ['tt_sd', 's']
 # features_Z = []
 
 n_sparse_features = 0
@@ -84,9 +84,11 @@ X_train, X_test, Y_train, Y_test = train_test_split(X.numpy(), Y.numpy(), test_s
 
 X_train, X_test, Y_train, Y_test = [tf.constant(i) for i in [X_train, X_test, Y_train, Y_test]]
 
-_EPOCHS = {'learning': 400, 'equilibrium': 2}
+# _EPOCHS = {'learning': 400, 'equilibrium': 20}
+_EPOCHS = {'learning': 10, 'equilibrium': 2}
 _LR = 1e-1
 _RELATIVE_GAP = 1e-8
+_XTICKS_SPACING = 50
 # To reduce variability in estimates of experiments, it is better to not use batches
 # _BATCH_SIZE = None
 _BATCH_SIZE = 16
@@ -100,17 +102,18 @@ _EPOCHS_PRINT_INTERVAL = 5
 _LOSS_WEIGHTS ={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1}
 
 # Models
-list_models = ['equilibrium', 'lue', 'ode', 'lpe', 'odlue', 'odlulpe']
+list_models = ['equilibrium', 'lue', 'ode', 'lpe', 'odlue', 'odlulpe', 'tvodlulpe']
 
 # run_model = dict.fromkeys(list_models,True)
 run_model = dict.fromkeys(list_models, False)
 
 # run_model['equilibrium'] = True
-# run_model['lue'] = True
-run_model['ode'] = True
+run_model['lue'] = True
+# run_model['ode'] = True
 # run_model['lpe'] = True
-# run_model['odlue'] = True
-# run_model['odlulpe'] = True
+run_model['odlue'] = True
+run_model['odlulpe'] = True
+# run_model['tvodlulpe'] = True
 
 train_results_dfs = {}
 val_results_dfs = {}
@@ -125,10 +128,10 @@ if run_model['equilibrium']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           initial_values={'tt': -1, 'c': -6, 's': -3, 'psc_factor': 0,
+                                           initial_values={'tt': -1, 'tt_sd': -1.3, 's': -3, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(tntp_network.links)},
                                            trainables={'psc_factor': False, 'fixed_effect': False
-                                               , 'tt': False, 'c': False, 's': False},
+                                               , 'tt': False, 'tt_sd': False, 's': False},
                                            )
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
@@ -213,15 +216,15 @@ if run_model['lue']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           initial_values={'tt': 0, 'c': 0, 's': 0, 'psc_factor': 0,
+                                           initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(tntp_network.links)},
-                                           true_values={'tt': -1, 'c': -6, 's': -3},
+                                           true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
                                            trainables={'psc_factor': False, 'fixed_effect': False
-                                               , 'tt': True, 'c': True, 's': True},
+                                               , 'tt': True, 'tt_sd': True, 's': True},
                                            )
 
-    # utility_parameters.random_initializer((-1,1),['tt','c','s'])
-    utility_parameters.random_initializer((0, 0), ['tt', 'c', 's'])
+    # utility_parameters.random_initializer((-1,1),['tt','tt_sd','s'])
+    utility_parameters.random_initializer((0, 0), ['tt', 'tt_sd', 's'])
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
                                    initial_values={'alpha': 0.15, 'beta': 4},
@@ -261,7 +264,7 @@ if run_model['lue']:
         utility=utility_parameters,
         bpr=bpr_parameters,
         od=od_parameters,
-        n_periods=len(np.unique(X_train[:, :, -1].numpy().flatten()))
+        # n_periods=len(np.unique(X_train[:, :, -1].numpy().flatten()))
     )
 
     train_results_dfs['lue'], val_results_dfs['lue'] = lue.train(
@@ -285,8 +288,8 @@ if run_model['lue']:
     plt.show()
 
     plot_convergence_estimates(estimates=train_results_estimates.\
-                               assign(vot = train_results_estimates['tt']/train_results_estimates['c'])[['epoch','vot']],
-                               true_values={'vot':lue.utility.true_values['tt']/lue.utility.true_values['c']})
+                               assign(rr = train_results_estimates['tt_sd']/train_results_estimates['tt'])[['epoch','rr']],
+                               true_values={'rr':lue.utility.true_values['tt']/lue.utility.true_values['tt_sd']})
     plt.show()
 
     print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(lue.theta.numpy())))}")
@@ -303,10 +306,10 @@ if run_model['ode']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           initial_values={'tt': -1, 'c': -6, 's': -3, 'psc_factor': 0,
+                                           initial_values={'tt': -1, 'tt_sd': -1.3, 's': -3, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(tntp_network.links)},
                                            trainables={'psc_factor': False, 'fixed_effect': False
-                                               , 'tt': False, 'c': False, 's': False},
+                                               , 'tt': False, 'tt_sd': False, 's': False},
                                            )
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
@@ -351,7 +354,7 @@ if run_model['ode']:
         utility=utility_parameters,
         bpr=bpr_parameters,
         od=od_parameters,
-        n_periods=len(np.unique(X_train[:, :, -1].numpy().flatten()))
+        # n_periods=len(np.unique(X_train[:, :, -1].numpy().flatten()))
     )
 
     train_results_dfs['ode'], val_results_dfs['ode'] = ode.train(
@@ -392,13 +395,13 @@ if run_model['lpe']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           initial_values={'tt': -1, 'c': -6, 's': -3, 'psc_factor': 0,
+                                           initial_values={'tt': -1, 'tt_sd': -1.3, 's': -3, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(tntp_network.links)},
                                            trainables={'psc_factor': False, 'fixed_effect': False
-                                               , 'tt': False, 'c': False, 's': False},
+                                               , 'tt': False, 'tt_sd': False, 's': False},
                                            )
 
-    # utility_parameters.random_initializer((-1,1),['tt','c','s'])
+    # utility_parameters.random_initializer((-1,1),['tt','tt_sd','s'])
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
                                    initial_values={'alpha': 0.15, 'beta': 4},
@@ -471,7 +474,7 @@ if run_model['lpe']:
     plt.show()
 
     print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(lpe.theta.numpy())))}, "
-          f"vot = {train_results_estimates.eval('tt/c').values[-1]:0.2f}")
+          f"rr = {train_results_estimates.eval('tt_sd/tt').values[-1]:0.2f}")
     print(f"alpha = {lpe.alpha: 0.2f}, beta  = {lpe.beta: 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(lpe.q - tntp_network.q.flatten())): 0.2f}")
 
@@ -486,16 +489,16 @@ if run_model['odlue']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           initial_values={'tt': 0, 'c': 0, 's': 0, 'psc_factor': 0,
+                                           initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(tntp_network.links)},
-                                           true_values={'tt': -1, 'c': -6, 's': -3},
-                                           # signs={'tt': '-', 'c': '-', 's': '-'},
+                                           true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
+                                           # signs={'tt': '-', 'tt_sd': '-', 's': '-'},
                                            trainables={'psc_factor': False, 'fixed_effect': False
-                                               , 'tt': True, 'c': True, 's': True},
+                                               , 'tt': True, 'tt_sd': True, 's': True},
                                            )
 
-    # utility_parameters.random_initializer((-1,1),['tt','c','s'])
-    utility_parameters.random_initializer((0, 0), ['tt', 'c', 's'])
+    # utility_parameters.random_initializer((-1,1),['tt','tt_sd','s'])
+    utility_parameters.random_initializer((0, 0), ['tt', 'tt_sd', 's'])
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
                                    initial_values={'alpha': 0.15, 'beta': 4},
@@ -555,8 +558,8 @@ if run_model['odlue']:
                                 xticks_spacing = 250)
 
     plot_convergence_estimates(estimates=train_results_estimates.\
-                               assign(vot = train_results_estimates['tt']/train_results_estimates['c'])[['epoch','vot']],
-                               true_values={'vot':lue.utility.true_values['tt']/lue.utility.true_values['c']})
+                               assign(rr = train_results_estimates['tt_sd']/train_results_estimates['tt'])[['epoch','rr']],
+                               true_values={'rr':odlue.utility.true_values['tt']/odlue.utility.true_values['tt_sd']})
     plt.show()
 
     Qs = {'true': tntp_network.OD.Q_true, 'historic': Q_historic, 'estimated': tf.sparse.to_dense(odlue.Q).numpy()}
@@ -566,7 +569,7 @@ if run_model['odlue']:
     plt.show()
 
     print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlue.theta.numpy())))}, "
-          f"vot = {train_results_estimates.eval('tt/c').values[-1]:0.2f}")
+          f"rr = {train_results_estimates.eval('tt_sd/tt').values[-1]:0.2f}")
     print(f"alpha = {odlue.alpha: 0.2f}, beta  = {odlue.beta: 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(odlue.q - tntp_network.q.flatten())): 0.2f}")
     
@@ -604,16 +607,16 @@ if run_model['odlulpe']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           initial_values={'tt': 0, 'c': 0, 's': 0, 'psc_factor': 0,
+                                           initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(tntp_network.links)},
-                                           true_values={'tt': -1, 'c': -6, 's': -3},
-                                           # signs={'tt': '-', 'c': '-', 's': '-'},
+                                           true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
+                                           # signs={'tt': '-', 'tt_sd': '-', 's': '-'},
                                            trainables={'psc_factor': False, 'fixed_effect': True
-                                               , 'tt': True, 'c': True, 's': True},
+                                               , 'tt': True, 'tt_sd': True, 's': True},
                                            )
 
-    utility_parameters.random_initializer((0, 0), ['tt', 'c', 's'])
-    # utility_parameters.random_initializer((-1,1),['tt','c','s'])
+    utility_parameters.random_initializer((0, 0), ['tt', 'tt_sd', 's'])
+    # utility_parameters.random_initializer((-1,1),['tt','tt_sd','s'])
 
     equilibrator = Equilibrator(
         network=tntp_network,
@@ -655,8 +658,8 @@ if run_model['odlulpe']:
                                 xticks_spacing = 250)
 
     plot_convergence_estimates(estimates=train_results_estimates.\
-                               assign(vot = train_results_estimates['tt']/train_results_estimates['c'])[['epoch','vot']],
-                               true_values={'vot':odlulpe.utility.true_values['tt']/odlulpe.utility.true_values['c']})
+                               assign(rr = train_results_estimates['tt_sd']/train_results_estimates['tt'])[['epoch','rr']],
+                               true_values={'rr':odlulpe.utility.true_values['tt_sd']/odlulpe.utility.true_values['tt']})
 
     plot_convergence_estimates(estimates=train_results_estimates[['epoch','alpha','beta']],
                                true_values=odlulpe.bpr.true_values)
@@ -674,9 +677,95 @@ if run_model['odlulpe']:
     plt.show()
 
     print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlulpe.theta.numpy())))}, "
-          f"vot = {train_results_estimates.eval('tt/c').values[-1]:0.2f}")
+          f"rr = {train_results_estimates.eval('tt_sd/tt').values[-1]:0.2f}")
     print(f"alpha = {np.mean(odlulpe.alpha): 0.2f}, beta  = {np.mean(odlulpe.beta): 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(odlulpe.q - tntp_network.q.flatten())): 0.2f}")
+
+if run_model['tvodlulpe']:
+    print('\ntvodlulpe: Time specific utility and OD, link performance parameters, no historic OD')
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
+
+    utility_parameters = UtilityParameters(features_Y=['tt'],
+                                           features_Z=features_Z,
+                                           initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
+                                                           'fixed_effect': np.zeros_like(tntp_network.links)},
+                                           true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
+                                           trainables={'psc_factor': False, 'fixed_effect': True
+                                               , 'tt': True, 'tt_sd': True, 's': True},
+                                           )
+
+    # utility_parameters.random_initializer((-1,1),['tt','tt_sd','s'])
+    utility_parameters.random_initializer((0, 0), ['tt', 'tt_sd', 's'])
+
+    bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
+                                   initial_values={'alpha': 0.15 * np.ones_like(tntp_network.links, dtype=np.float32),
+                                                   'beta': 4 * np.ones_like(tntp_network.links, dtype=np.float32)},
+                                   trainables={'alpha': True, 'beta': True},
+                                   )
+
+    od_parameters = ODParameters(key='od',
+                                 initial_values=tntp_network.q.flatten(),
+                                 true_values=tntp_network.q.flatten(),
+                                 historic_values={1: tntp_network.q.flatten()},
+                                 trainable=True)
+
+    tvodlulpe = GISUELOGIT(
+        key='tvodlulpe',
+        network=tntp_network,
+        dtype=tf.float64,
+        utility=utility_parameters,
+        bpr=bpr_parameters,
+        od=od_parameters,
+        n_periods=len(np.unique(X_train[:, :, -1].numpy().flatten()))
+    )
+
+    train_results_dfs['tvodlulpe'], val_results_dfs['tvodlulpe'] = tvodlulpe.train(
+        X_train, Y_train, X_test, Y_test,
+        optimizer=optimizer,
+        # generalization_error={'train': False, 'validation': True},
+        batch_size=_BATCH_SIZE,
+        loss_weights=_LOSS_WEIGHTS,
+        loss_metric=_LOSS_METRIC,
+        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
+        threshold_relative_gap=_RELATIVE_GAP,
+        epochs=_EPOCHS)
+
+    # Plot heatmap with flows of top od pairs
+    plot_top_od_flows_periods(tvodlulpe, df, period_feature='hour', top_k=20)
+
+    plot_predictive_performance(train_losses=train_results_dfs['tvodlulpe'], val_losses=val_results_dfs['tvodlulpe'],
+                                xticks_spacing=_XTICKS_SPACING)
+
+    plot_convergence_estimates(estimates=train_results_dfs['tvodlulpe'][['epoch', 'alpha', 'beta']],
+                               xticks_spacing=_XTICKS_SPACING)
+
+    sns.displot(pd.melt(pd.DataFrame({'alpha': tvodlulpe.alpha, 'beta': tvodlulpe.beta}), var_name='parameters'),
+                x="value", hue="parameters", multiple="stack", kind="kde", alpha=0.8)
+
+    plt.show()
+
+    # Compute utility parameters over time (heatmap) and value of travel time reliability (lineplot)
+    theta_df = plot_utility_parameters_periods(tvodlulpe, df, period_feature='hour')
+
+    plt.show()
+
+    rr_df = theta_df.apply(compute_rr, axis=1).reset_index().rename(columns={'index': 'hour', 0: 'rr'})
+
+    sns.lineplot(data=rr_df, x='hour', y="rr")
+
+    plt.show()
+
+    sns.displot(pd.DataFrame({'fixed_effect': np.array(tvodlulpe.fixed_effect)}),
+                x="fixed_effect", multiple="stack", kind="kde", alpha=0.8)
+
+    plt.show()
+
+    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(tvodlulpe.theta.numpy())))}")
+    print(f"alpha = {np.mean(tvodlulpe.alpha): 0.2f}, beta  = {np.mean(tvodlulpe.beta): 0.2f}")
+    print(
+        f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(tvodlulpe.q - tntp_network.q.flatten())): 0.2f}")
+    print(f"Avg observed OD: {np.mean(np.abs(tntp_network.q.flatten())): 0.2f}")
 
 
 # Write csv file with estimation results
@@ -687,10 +776,48 @@ train_results_df, val_results_df \
 train_results_df.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')}_train_results_{network_name}.csv")
 val_results_df.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')}_validation_results_{network_name}.csv")
 
-os.getcwd()
+## Summary of model parameters
 
-## Plot of convergence toward true vot across models
+models = [lue,odlue,odlulpe]
+results = pd.DataFrame({'parameter': [], 'model': []})
 
+for model in models:
+    results = results.append(pd.DataFrame(
+        {'parameter': ['tt'] + features_Z +
+                      ['rr'] +
+                      ['fixed_effect_mean', 'fixed_effect_std',
+                       'alpha_mean', 'alpha_std',
+                       'beta_mean', 'beta_std',
+                       'od_mean', 'od_std',],
+         'values': list(np.mean(model.theta.numpy(),axis =0))  +
+                   [float(model.get_parameters_estimates().eval('tt_sd/tt'))] +
+                   [np.mean(model.fixed_effect),np.std(model.fixed_effect),
+                    np.mean(model.alpha),np.std(model.alpha),
+                    np.mean(model.beta),np.std(model.beta),
+                    np.mean(model.q),np.std(model.q)]}).\
+                             assign(model = model.key)
+                             )
+
+print(results.pivot_table(index = ['parameter'], columns = 'model', values = 'values', sort=False).round(4))
+
+## Summary of models goodness of fit
+
+results_losses = pd.DataFrame({})
+loss_columns = ['loss_flow', 'loss_tt', 'loss_eq_flow', 'loss_total']
+
+for i, model in enumerate(models):
+
+    results_losses_model = model.split_results(train_results_dfs[model.key])[1].assign(model = model.key)
+    results_losses_model = results_losses_model[results_losses_model.epoch == _EPOCHS['learning']].iloc[[0]]
+    results_losses = results_losses.append(results_losses_model)
+
+results_losses[loss_columns] = (results_losses[loss_columns]-1)*100
+
+print(results_losses[['model'] + loss_columns].round(1))
+
+## Plot of convergence toward true reliabiloty ratio (rr) across models
+
+models = [lue,odlue,odlulpe]
 
 train_estimates = {}
 train_losses = {}
@@ -702,20 +829,19 @@ for model in models:
 
 train_estimates_df = pd.concat(train_estimates.values())
 
-train_estimates_df['vot'] = train_estimates_df['tt']/train_estimates_df['c']
+train_estimates_df['rr'] = train_estimates_df['tt_sd']/train_estimates_df['tt']
 
-estimates = train_estimates_df[['epoch','model','vot']].reset_index().drop('index',axis = 1)
+estimates = train_estimates_df[['epoch','model','rr']].reset_index().drop('index',axis = 1)
 estimates = estimates[estimates.epoch != 0]
 
 fig, ax = plt.subplots(nrows=1, ncols=1)
 
-g = sns.lineplot(data=estimates, x='epoch', hue='model', y='vot')
+g = sns.lineplot(data=estimates, x='epoch', hue='model', y='rr')
 
-ax.hlines(y=1/6, xmin=estimates['epoch'].min(), xmax=estimates['epoch'].max(), linestyle='--', label = 'truth')
+ax.hlines(y=compute_rr(utility_parameters.true_values), xmin=estimates['epoch'].min(), xmax=estimates['epoch'].max(), linestyle='--', label = 'truth')
 
-# ax.set_ylabel('value of time')
+ax.set_ylabel('reliability ratio')
 
 plt.ylim(ymin=0)
 
 plt.show()
-

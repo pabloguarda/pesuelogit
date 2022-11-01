@@ -237,7 +237,7 @@ class MultidayExperiment(NetworkExperiment):
 
                     results_parameters, results_losses = self.model.split_results(best_results)
 
-                    results_parameters['vot'] = compute_vot(pd.Series(results_parameters.to_dict(orient='records')[0]))
+                    results_parameters['vot'] = compute_rr(pd.Series(results_parameters.to_dict(orient='records')[0]))
 
                     results_parameters = pd.melt(results_parameters,
                                                  id_vars='epoch', var_name='parameter', value_name='estimate')

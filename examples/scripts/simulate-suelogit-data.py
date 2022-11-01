@@ -46,14 +46,15 @@ load_k_shortest_paths(network=tntp_network, k=2, update_incidence_matrices=True)
 
 n_days = 100
 n_links = len(tntp_network.links)
-features_Z = ['c', 's']
+features_Z = ['tt_sd', 's']
 
 n_sparse_features = 0
 features_sparse = ['k' + str(i) for i in np.arange(0, n_sparse_features)]
 
 utility_function = UtilityParameters(features_Y=['tt'],
                                      features_Z=features_Z,
-                                     true_values={'tt': -1, 'c': -6, 's': -3}
+                                     true_values={'tt': -1, 'tt_sd': -1.3, 's': -3}
+                                     #  true_values={'tt': -1, 'c': -6, 's': -3}
                                      )
 
 utility_function.add_sparse_features(Z=features_sparse)
