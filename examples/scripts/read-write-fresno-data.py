@@ -307,18 +307,28 @@ for date, hour in itertools.product(dates, hours):
     #                                                 'selected_date'] + '.shp'
     #                                             )
 
-
-# Run this command only once to consolidate all csv files into a single file that it uploaded to github repo
+# Consolidate all csv files into two single files per year. Read from output folder
 read_folderpath = 'output/network-data/fresno/links/'
 df = pd.concat([pd.read_csv(file) for file in glob.glob(read_folderpath + "*fresno-link-data*")], axis=0)
+df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
+df['year'] = df.date.dt.year
+df['period'] = df['date'].astype(str) + '-' + df['hour'].astype(str)
 
+# Only select data from Tuesday to Thursday
+df = df[df['date'].dt.dayofweek.between(1, 3)]
+
+# Write data in input folder
 write_folderpath = isl.config.dirs['read_network_data'] + 'links/spatiotemporal-data/'
 
-df.to_csv(str(os.getcwd()) + '/' + write_folderpath + 'fresno-spatiotemporal-link-data.csv.gz',
-           index=False,
-           compression="gzip")
+for year in sorted(df['year'].unique()):
+    df_year = df[df['year'] == year].sort_values('period')
 
-print('consolidated file has been written')
+    filename = f'fresno-spatiotemporal-link-data-{year}.csv.gz'
+    filepath = f"{os.getcwd()}/{write_folderpath}{filename}"
+
+    df_year.to_csv(filepath, index=False, compression="gzip")
+
+    print(f'consolidated file {filename} has been written')
 
 sys.exit()
 
