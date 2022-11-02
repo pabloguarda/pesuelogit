@@ -141,7 +141,30 @@ def add_period_id(df: pd.DataFrame, period_feature: str = None, varname = 'perio
                       left_on=period_feature, right_on=period_feature)
 
     return df
-    
+
+
+def get_tensors_by_year(df, features_Z) -> Tuple[Dict[str, tf.Tensor],Dict[str, tf.Tensor]]:
+    n_links = len(df.link_key.unique())
+    X,Y = {}, {}
+
+    for year in sorted(df['year'].unique()):
+        df_year = df[df['year'] == year].sort_values(['date', 'hour'])
+
+        # n_dates, n_hours = len(df_year.date.unique()), len(df_year.hour.unique())
+        #
+        # n_timepoints = n_dates * n_hours
+        n_timepoints = len(df_year[['date', 'hour']].drop_duplicates())
+
+        # TODO: Add an assert to check the dataframe is properly sorted before reshaping it into a tensor
+
+        traveltime_data = get_y_tensor(y=df_year[['tt_avg']], n_links=n_links, n_timepoints=n_timepoints)
+        flow_data = get_y_tensor(y=df_year[['counts']], n_links=n_links, n_timepoints=n_timepoints)
+
+        Y[year] = tf.concat([traveltime_data, flow_data], axis=2)
+
+        X[year] = get_design_tensor(Z=df_year[features_Z + ['period_id']], n_links=n_links, n_timepoints=n_timepoints)
+
+    return X, Y
     
     
 def traveltime_imputation(raw_data: pd.DataFrame):
