@@ -331,6 +331,7 @@ class GISUELOGIT(tf.keras.Model):
         self.n_periods = n_periods
 
         self.period_ids = None
+        self._original_period_ids = None
 
         self.utility = utility
 
@@ -549,9 +550,9 @@ class GISUELOGIT(tf.keras.Model):
     def theta(self):
         theta = self.project_theta(tf.stack(self._theta,axis = 1))
 
-        # if self.n_periods>1:
-        #     theta = tf.experimental.numpy.take(theta,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
-        #
+        if self.utility.n_periods>1:
+            theta = tf.experimental.numpy.take(theta,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
+
         return theta
 
     @property
@@ -1049,7 +1050,8 @@ class GISUELOGIT(tf.keras.Model):
 
     def split_results(self, results: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
-        col_losses = ['epoch'] + [col for col in results.columns if any(x in col for x in ['loss_', 'error', 'relative_gap'])]
+        col_losses = ['epoch'] + [col for col in results.columns if any(x in col
+                                                                        for x in ['loss_', 'error', 'relative_gap'])]
 
         results_losses = results[col_losses]
 
@@ -1057,8 +1059,28 @@ class GISUELOGIT(tf.keras.Model):
 
         return results_parameters, results_losses
 
+    @property
+    def original_period_ids(self):
+        return self._original_period_ids
+
+    def set_period_idxs(self, X: tf.Tensor):
+
+        self._original_period_ids = X[:, :, -1]
+
+        period_ids = X[:, :, -1].numpy()
+        period_keys = np.unique(period_ids[:, 0])
+
+        d = dict(zip(list(map(int, np.sort(np.unique(period_keys)))), range(0, len(period_keys))))
+
+        for i,j in d.items():
+            period_ids[period_ids == i] = j
+
+        self._period_ids = period_ids
+
+        return tf.concat([X[:, :, :-1], tf.expand_dims(period_ids,2)],axis = 2)
+
     def train(self,
-              X_train: tf.constant,
+              X_train: tf.Tensor,
               Y_train: tf.constant,
               X_val: tf.constant = None,
               Y_val: tf.constant = None,
@@ -1070,6 +1092,7 @@ class GISUELOGIT(tf.keras.Model):
               threshold_relative_gap: float = 1e-4,
               loss_metric=None,
               momentum_equilibrium = 1,
+              equilibrium_stage = False,
               relative_losses = True,
               generalization_error: Dict[str, bool] = None,
               epochs_print_interval:int = 1,
@@ -1084,15 +1107,18 @@ class GISUELOGIT(tf.keras.Model):
         if generalization_error is None:
             generalization_error = {'train': False, 'validation': False}
 
-        X_train, Y_train = map(lambda x: tf.cast(x, tf.float64), [X_train, Y_train])
+        X_train, Y_train = map(lambda x: copy.copy(tf.cast(x, tf.float64)), [X_train, Y_train])
 
         if X_val is not None and Y_val is not None:
-            X_val, Y_val = map(lambda x: tf.cast(x,tf.float64),[X_val, Y_val])
+            X_val, Y_val = map(lambda x: copy.copy(tf.cast(x,tf.float64)),[X_val, Y_val])
+
+            X_val = self.set_period_idxs(X=X_val)
 
         self.n_days, self.n_links, self.n_features = X_train.shape
         # self.periods =
 
-        self.period_ids = X_train[:, :, -1]
+        X_train = self.set_period_idxs(X = X_train)
+        self.period_ids = X_train[:,:,-1]
 
         self.create_tensor_variables(initial_values = initial_values, trainables=trainables)
 
@@ -1107,7 +1133,8 @@ class GISUELOGIT(tf.keras.Model):
             # self._flows.assign(tf.math.sqrt(tf.reduce_mean(predicted_flow,axis = 0)))
 
             if self.n_periods>1:
-                predicted_flow = tf.concat([tf.expand_dims(tf.reduce_mean(link_flows,axis = 0),axis = 0) for link_flows in self.split_link_flows_by_period(predicted_flow)],axis =0)
+                predicted_flow = tf.concat([tf.expand_dims(tf.reduce_mean(link_flows,axis = 0),axis = 0)
+                                            for link_flows in self.split_link_flows_by_period(predicted_flow)],axis =0)
 
                 self._flows.assign(tf.math.sqrt(predicted_flow))
 
@@ -1196,7 +1223,9 @@ class GISUELOGIT(tf.keras.Model):
 
             if epoch % epochs_print_interval == 0 or epoch == 1 or terminate_algorithm:
 
-                print(f"\nEpoch: {epoch}/{epochs['learning']}, n_periods: {self.n_periods},  n_train: {X_train.shape[0]}", end = "")
+                print(f"\nEpoch: {epoch}/{epochs['learning']}, "
+                      f"n_periods: {self.n_periods},  "
+                      f"n_train: {X_train.shape[0]}", end = "")
 
                 if X_val is not None:
                     print(f", n_test: {X_val.shape[0]}")
@@ -1301,9 +1330,11 @@ class GISUELOGIT(tf.keras.Model):
 
             # TODO: Path set selection (confirm if necessary)
 
-        train_losses_df = pd.concat([pd.DataFrame([losses_epoch], index=[0]).astype(float).assign(epoch = epoch) for epoch, losses_epoch in enumerate(train_losses)])
+        train_losses_df = pd.concat([pd.DataFrame([losses_epoch], index=[0]).astype(float).assign(epoch = epoch)
+                                     for epoch, losses_epoch in enumerate(train_losses)])
 
-        val_losses_df = pd.concat([pd.DataFrame([losses_epoch], index=[0]).astype(float).assign(epoch = epoch) for epoch, losses_epoch in enumerate(val_losses)])
+        val_losses_df = pd.concat([pd.DataFrame([losses_epoch], index=[0]).astype(float).assign(epoch = epoch)
+                                   for epoch, losses_epoch in enumerate(val_losses)])
 
         # Replace equilibirum loss in first epoch with the second epoch, to avoid zero loss when initializing utility parameters to zero
         train_losses_df.loc[train_losses_df['epoch'] == 0,'loss_eq_flow'] \
@@ -1317,14 +1348,19 @@ class GISUELOGIT(tf.keras.Model):
             = val_losses_df.loc[val_losses_df['epoch'] == 1, 'loss_od'].copy()
 
         train_results_df = pd.concat([train_losses_df.reset_index(drop=True),
-                                      pd.concat(estimates, axis=0).reset_index(drop=True)], axis=1).assign(relative_gap = relative_gaps)
+                                      pd.concat(estimates, axis=0).reset_index(drop=True)], axis=1).\
+            assign(relative_gap = relative_gaps)
 
         val_results_df = val_losses_df.reset_index(drop=True)
 
         # train_losses_df['generalization_error'] = train_generalization_errors
         # val_losses_df['generalization_error'] = val_generalization_errors
 
-        if epoch == epochs['learning'] and epochs['equilibrium']>0:
+        if not equilibrium_stage:
+            train_results_df['stage'] ='learning'
+            val_results_df['stage'] = 'learning'
+
+        if epoch == epochs['learning'] and epochs['equilibrium']>0 and not equilibrium_stage:
 
             print('\nEquilibrium stage\n')
             train_results_eq, val_results_eq = self.train_equilibrium(
@@ -1342,9 +1378,6 @@ class GISUELOGIT(tf.keras.Model):
             train_results_eq['epoch'] += train_results_df['epoch'].max()
             val_results_eq['epoch'] += val_results_df['epoch'].max()
 
-            train_results_df['stage'] ='learning'
-            val_results_df['stage'] = 'learning'
-
             train_results_eq['stage'] = 'equilibrium'
             val_results_eq['stage'] = 'equilibrium'
 
@@ -1359,8 +1392,10 @@ class GISUELOGIT(tf.keras.Model):
             # Compution of relative losses
             # losses_columns = [column for column in train_losses_df.keys() if column not in ["loss_eq_flow"]]
             losses_columns = [column for column in train_losses_df.keys()]
-            train_results_df[losses_columns] = self.normalized_losses(train_results_df[losses_columns])#.assign(loss_eq_flow = train_losses_df['loss_eq_flow'])
-            val_results_df[losses_columns] = self.normalized_losses(val_results_df[losses_columns])#.assign(loss_eq_flow = val_losses_df['loss_eq_flow'])
+            train_results_df[losses_columns] = self.normalized_losses(train_results_df[losses_columns])
+            #.assign(loss_eq_flow = train_losses_df['loss_eq_flow'])
+            val_results_df[losses_columns] = self.normalized_losses(val_results_df[losses_columns])
+            #.assign(loss_eq_flow = val_losses_df['loss_eq_flow'])
 
 
         return train_results_df, val_results_df
@@ -1404,7 +1439,7 @@ class GISUELOGIT(tf.keras.Model):
         # predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
         # trainable_variables = self._flows
 
-        kwargs.update(trainables=trainables, initial_values=initial_values)
+        kwargs.update(trainables=trainables, initial_values=initial_values, equilibrium_stage = True)
 
         train_results_eq, val_results_eq = suelogit.train(
            **kwargs, loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'eq_flow': 1})

@@ -181,7 +181,8 @@ def plot_levels_experiment(results: pd.DataFrame,
 
     # 2) Bias in value of time
     if 'vot' in results.parameter.values:
-        sns.boxplot(x="level", y="bias", data=results[results.parameter == 'vot'], color="white", showfliers=False, ax=ax[(0, 1)])
+        sns.boxplot(x="level", y="bias", data=results[results.parameter == 'vot'], color="white", showfliers=False,
+                    ax=ax[(0, 1)])
         ax[(0, 1)].axhline(0, linestyle='--', color='gray')
         ax[(0, 1)].set_ylabel('bias in value of time')
 
@@ -240,14 +241,23 @@ def plot_top_od_flows_periods(model, df, period_feature, top_k = 10):
     Plot top od pairs according to the variation of the od flows over time periods
     """
 
-
     period_keys = df[[period_feature, 'period_id']].drop_duplicates()
 
+    period_ids = list(map(int, np.sort(np.unique(model.original_period_ids[:, 0]))))
+
     q_df = pd.DataFrame({})
-    for i, j in zip(range(model.q.shape[0]), list(period_keys[period_feature])):
+    for i, j in zip(range(model.q.shape[0]),period_ids):
         # q_dict = dict(zip(fresno_network.ods, list(tvodlulpe.q[i].numpy())))
         q_dict = dict(zip(model.triplist, list(model.q[i].numpy())))
-        q_df = q_df.append(pd.DataFrame(q_dict, index=[j]))
+
+        if model.q.shape[0] > 1:
+            label_period_feature = period_keys[period_keys['period_id'] == j][period_feature]
+        else:
+            label_period_feature_1 = period_keys[period_keys['period_id'] == period_ids[0]][period_feature]
+            label_period_feature_2 = period_keys[period_keys['period_id'] == period_ids[-1]][period_feature]
+            label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
+
+        q_df = q_df.append(pd.DataFrame(q_dict, index=[label_period_feature]))
 
     top_q = q_df[q_df.var().sort_values(ascending=False)[0:top_k].index].sort_index()
 
@@ -256,20 +266,33 @@ def plot_top_od_flows_periods(model, df, period_feature, top_k = 10):
     plt.xlabel(period_feature, fontsize=12)
     plt.ylabel('od pair', fontsize=12)
 
+    # plt.show()
+
     return top_q
 
 def plot_utility_parameters_periods(model, df, period_feature, include_vot = False):
 
     period_keys = df[[period_feature, 'period_id']].drop_duplicates()
 
+    period_ids = list(map(int,np.sort(np.unique(model.original_period_ids[:, 0]))))
+
     theta_df = pd.DataFrame({})
-    for i,j in zip(range(model.theta.shape[0]),list(period_keys[period_feature])):
+    for i,j in zip(range(model.theta.shape[0]), period_ids):
         theta_dict = dict(zip(model.utility.features, list(model.theta[i].numpy())))
 
         if include_vot:
             theta_dict['vot'] = float(compute_rr(theta_dict))
 
-        theta_df = theta_df.append(pd.DataFrame(theta_dict, index=[j]))
+        label_period_feature = f"{period_ids[0]}-{period_ids[-1]}"
+
+        if model.theta.shape[0]> 1:
+            label_period_feature = period_keys[period_keys['period_id'] == j][period_feature]
+        else:
+            label_period_feature_1 = period_keys[period_keys['period_id'] == period_ids[0]][period_feature].values[0]
+            label_period_feature_2 = period_keys[period_keys['period_id'] == period_ids[-1]][period_feature].values[0]
+            label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
+
+        theta_df = theta_df.append(pd.DataFrame(theta_dict, index=[label_period_feature]))
 
     if include_vot:
         theta_df[theta_df['vot'].isna()] = 0
@@ -287,6 +310,8 @@ def plot_utility_parameters_periods(model, df, period_feature, include_vot = Fal
 
     plt.xlabel(period_feature, fontsize=12)
     plt.ylabel('parameter', fontsize=12)
+
+    # plt.show()
 
     return theta_df
 

@@ -106,7 +106,7 @@ df['period'] = df['date'].astype(str) + '-' + df['hour'].astype(str)
 # - By hour
 period_feature = 'hour'
 df = add_period_id(df, period_feature=period_feature)
-period_keys = df[[period_feature,'period_id']].drop_duplicates()
+period_keys = df[[period_feature,'period_id']].drop_duplicates().reset_index().drop('index',axis =1).sort_values('hour')
 print(period_keys)
 
 # - By hour
@@ -259,7 +259,8 @@ df.groupby('date')[['speed_sd','speed_avg', 'counts']].mean().assign(total_obs =
 # Include only data between 4pm and 5pm
 X, Y = get_tensors_by_year(df[df.hour == 16], features_Z = features_Z)
 # Include hourly data between 6AM and 8PM (15 hour intervals)
-XT, YT = get_tensors_by_year(df, features_Z = features_Z)
+# XT, YT = get_tensors_by_year(df, features_Z = features_Z)
+XT, YT = get_tensors_by_year(df[df.hour.isin(range(14,18))], features_Z = features_Z)
 
 # Split to comply with temporal ordering
 # X_train, X_test, Y_train, Y_test = temporal_split(X[2019].numpy(), Y[2019].numpy(), n_days = X[2019].shape[0])
@@ -267,6 +268,7 @@ XT, YT = get_tensors_by_year(df, features_Z = features_Z)
 # X_train, X_test, Y_train, Y_test = X[2020], X[2019], Y[2020], Y[2019]
 X_train, X_test, Y_train, Y_test = X[2019], X[2020], Y[2019], Y[2020]
 XT_train, XT_test, YT_train, YT_test = XT[2019], XT[2020], YT[2019], YT[2020]
+
 
 # Remove validation set to reduce computation costs
 X_test, Y_test = None, None
@@ -279,7 +281,7 @@ run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','od
 # run_model.update(dict.fromkeys(['lue', 'odlue', 'odlulpe'], True))
 # run_model = dict.fromkeys( for i in ['lue', 'odlue', 'odlulpe'], True)
 # run_model['equilibrium'] = True
-# run_model['lue'] = True
+run_model['lue'] = True
 # run_model['odlue'] = True
 # run_model['odlulpe-1'] = True
 # run_model['odlulpe-2'] = True
@@ -288,7 +290,7 @@ run_model['tvodlulpe'] = True
 train_results_dfs = {}
 test_results_dfs = {}
 
-_EPOCHS = {'learning': 10, 'equilibrium': 10}
+_EPOCHS = {'learning': 10, 'equilibrium': 0}
 # _EPOCHS = {'learning': 500, 'equilibrium': 0}
 _BATCH_SIZE = None
 _LR = 5e-1
@@ -890,7 +892,7 @@ if run_model['tvodlulpe']:
                                            signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
                                                   'bus_stops': '-', 'intersections': '-'},
                                            trainables={'psc_factor': False, 'fixed_effect': True},
-                                           time_varying=True,
+                                           # time_varying=True,
                                            )
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
@@ -903,7 +905,7 @@ if run_model['tvodlulpe']:
                                  initial_values=fresno_network.q.flatten(),
                                  true_values=fresno_network.q.flatten(),
                                  historic_values={1: fresno_network.q.flatten()},
-                                 # time_varying=True,
+                                 time_varying=True,
                                  trainable=True)
 
     tvodlulpe = GISUELOGIT(
