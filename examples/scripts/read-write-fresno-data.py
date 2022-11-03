@@ -129,6 +129,7 @@ filespath = isl.config.dirs['input_folder'] + "private/Fresno/inrix/speed/by-day
 
 dates = [os.path.splitext(os.path.basename(file))[0] for file in glob.glob(filespath + '/*.csv')]
 # hours = [16, 17, 18]
+# dates = ["2020-10-08", "2020-10-22"]
 
 hours = range(6,21)
 
@@ -159,7 +160,7 @@ for date, hour in itertools.product(dates, hours):
         selected_period_inrix={'year': [data_reader.options['selected_year']],
                                'month': [data_reader.options['selected_month']],
                                # 'day_month': [data_reader.options['selected_day_month']],
-                               'day_week': [1, 2, 3, 4, 5],
+                               # 'day_week': [1, 2, 3, 4, 5],
                                'hour': data_reader.options['selected_hour']},
         buffer_size={'inrix': 100, 'bus_stops': 50, 'incidents': 50, 'streets_intersections': 50},
         tt_units=options['tt_units']
@@ -318,13 +319,13 @@ df['period'] = df['date'].astype(str) + '-' + df['hour'].astype(str)
 df = df[df['date'].dt.dayofweek.between(1, 3)]
 
 # Write data in input folder
-write_folderpath = isl.config.dirs['read_network_data'] + 'links/spatiotemporal-data/'
+write_folderpath =f"{os.getcwd()}/input/network-data/fresno/links/spatiotemporal-data/"
 
 for year in sorted(df['year'].unique()):
     df_year = df[df['year'] == year].sort_values('period')
 
     filename = f'fresno-spatiotemporal-link-data-{year}.csv.gz'
-    filepath = f"{os.getcwd()}/{write_folderpath}{filename}"
+    filepath = f"{write_folderpath}{filename}"
 
     df_year.to_csv(filepath, index=False, compression="gzip")
 
