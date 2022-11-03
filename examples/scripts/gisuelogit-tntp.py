@@ -693,6 +693,7 @@ if run_model['tvodlulpe']:
                                            true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
                                            trainables={'psc_factor': False, 'fixed_effect': True
                                                , 'tt': True, 'tt_sd': True, 's': True},
+                                           time_varying=True,
                                            )
 
     # utility_parameters.random_initializer((-1,1),['tt','tt_sd','s'])
@@ -708,6 +709,7 @@ if run_model['tvodlulpe']:
                                  initial_values=tntp_network.q.flatten(),
                                  true_values=tntp_network.q.flatten(),
                                  historic_values={1: tntp_network.q.flatten()},
+                                 time_varying=True,
                                  trainable=True)
 
     tvodlulpe = GISUELOGIT(

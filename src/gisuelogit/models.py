@@ -183,6 +183,7 @@ class UtilityParameters(Parameters):
     """ Support utility function associated to multiple periods"""
 
     def __init__(self,
+                 time_varying = False,
                  *args,
                  **kwargs):
         # TODO: change label features_Y by endogenous_feature and features_Z by exogenous_features.
@@ -190,6 +191,8 @@ class UtilityParameters(Parameters):
         # kwargs['features_Y'] = None
 
         super().__init__(keys=['psc_factor', 'fixed_effect'], *args, **kwargs)
+
+        self.time_varying = time_varying
 
 
 class BPRParameters(Parameters):
@@ -201,7 +204,7 @@ class BPRParameters(Parameters):
         super().__init__(keys=keys, *args, **kwargs)
 
 
-class   ODParameters(Parameters):
+class  ODParameters(Parameters):
     """ Support OD with multiple periods """
 
     def __init__(self,
@@ -209,10 +212,11 @@ class   ODParameters(Parameters):
                  initial_values: np.array,
                  historic_values: Dict[str, np.array] = None,
                  true_values: np.array = None,
-                 shape=None,
+                 time_varying = False,
                  key='od',
                  *args,
                  **kwargs):
+
         kwargs['features_Z'] = None
         kwargs['features_Y'] = None
 
@@ -224,6 +228,8 @@ class   ODParameters(Parameters):
         # self.shape = shape
         self.trainable = trainable
         self.historic_values = historic_values
+
+        self.time_varying = time_varying
 
     @property
     def historic_values_array(self):
@@ -261,15 +267,15 @@ class   ODParameters(Parameters):
 
     def true_values_array(self) -> np.array:
 
-        if self.n_periods == 1:
-            return self.true_value
+        # if self.n_periods == 1:
+        #     return self.true_value
 
         return np.repeat(self.true_value[np.newaxis, :], self.n_periods, axis=0)
 
     def initial_values_array(self) -> np.array:
 
-        if self.n_periods == 1:
-            return self.initial_value
+        # if self.n_periods == 1:
+        #     return self.initial_value
 
         return np.repeat(self.initial_value[np.newaxis, :], self.n_periods, axis=0)
 
@@ -327,9 +333,18 @@ class GISUELOGIT(tf.keras.Model):
         self.period_ids = None
 
         self.utility = utility
+
         self.utility.n_periods = n_periods
+
+        if not self.utility.time_varying:
+            self.utility.n_periods = 1
+
         self.od = od
+
         self.od.n_periods = n_periods
+
+        if not self.od.time_varying:
+            self.od.n_periods = 1
 
         # self.linklist = [(link.key[0], link.key[1]) for link in self.network.links]
         self.n_nodes = self.network.get_n_nodes()

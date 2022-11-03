@@ -29,7 +29,7 @@ from src.gisuelogit.models import UtilityParameters, BPRParameters, ODParameters
 from src.gisuelogit.visualizations import plot_predictive_performance, plot_convergence_estimates, plot_utility_parameters_periods, plot_top_od_flows_periods
 from src.gisuelogit.networks import load_k_shortest_paths, read_paths, build_fresno_network, \
     Equilibrator, sparsify_OD, ColumnGenerator, read_OD
-from src.gisuelogit.etl import get_design_tensor, get_y_tensor, data_curation, temporal_split, add_period_id
+from src.gisuelogit.etl import get_design_tensor, get_y_tensor, data_curation, temporal_split, add_period_id, get_tensors_by_year
 from src.gisuelogit.descriptive_statistics import mse, btcg_mse, nrmse, mnrmse
 
 # Seed for reproducibility
@@ -62,7 +62,7 @@ load_k_shortest_paths(network=fresno_network, k=2, update_incidence_matrices=Tru
 ## Read spatiotemporal data
 folderpath = isl.config.dirs['read_network_data'] + 'links/spatiotemporal-data/'
 df = pd.concat([pd.read_csv(file) for file in glob.glob(folderpath + "*link-data*")], axis=0)
-# df.hour.unique()
+df.hour.unique()
 
 # TODO: Check why there are missing dates, e.g. October 1, 2019
 df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
@@ -71,12 +71,34 @@ df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
 df = df[df['date'].dt.dayofweek.between(1, 3)]
 # df = df[df['date'].dt.year == 2019]
 
-# TODO: Check why observations from Fridays (day == 4) have average and standard deviation of travel time equal to 0. Meantime we remove observations from Fridays
-
 # df['date'].dt.dayofweek.unique()
 # len(sorted(df['date']).unique())
 df['period'] = df['date'].astype(str) + '-' + df['hour'].astype(str)
 # df['period'] = df.period.map(hash)
+
+# # Consolidate all csv files into two single files per year. Read from output folder
+# read_folderpath = 'output/network-data/fresno/links/'
+# df = pd.concat([pd.read_csv(file) for file in glob.glob(read_folderpath + "*fresno-link-data*")], axis=0)
+# df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
+# df['year'] = df.date.dt.year
+# df['period'] = df['date'].astype(str) + '-' + df['hour'].astype(str)
+#
+# # Only select data from Tuesday to Thursday
+# df = df[df['date'].dt.dayofweek.between(1, 3)]
+#
+# # Write data in input folder
+# write_folderpath = isl.config.dirs['read_network_data'] + 'links/spatiotemporal-data/'
+#
+# for year in sorted(df['year'].unique()):
+#     df_year = df[df['year'] == year].sort_values('period')
+#
+#     filename = f'fresno-spatiotemporal-link-data-{year}.csv.gz'
+#     filepath = f"{os.getcwd()}/{write_folderpath}{filename}"
+#
+#     df_year.to_csv(filepath, index=False, compression="gzip")
+#
+#     print(f'consolidated file {filename} has been written')
+
 
 # Add id for period and respecting the temporal order
 # periods_keys = dict(zip(sorted(df['period'].unique()), range(len(sorted(df['period'].unique())))))
@@ -84,8 +106,8 @@ df['period'] = df['date'].astype(str) + '-' + df['hour'].astype(str)
 # - By hour
 period_feature = 'hour'
 df = add_period_id(df, period_feature=period_feature)
-
-# period_keys = df[[period_feature,'period_id']].drop_duplicates()
+period_keys = df[[period_feature,'period_id']].drop_duplicates()
+print(period_keys)
 
 # - By hour
 
@@ -125,8 +147,6 @@ features_Z = ['tt_sd', 'median_inc', 'incidents', 'bus_stops', 'intersections']
 n_links = len(fresno_network.links)
 df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
 df['year'] = df.date.dt.year
-X, Y = {}, {}
-
 df.hour.unique()
 
 # Select only dates used for previous paper
@@ -160,77 +180,39 @@ df[['tt_avg','tt_ff','tf_inrix']].mean()
 
 df['tt_ff'] = df.groupby('link_key')['tt_ff'].transform(lambda x: x.min())
 
-#Testing
-# df['tt_avg'] = df['tt_ff']
-
-# df = df.sort_values(by = 'period').copy()
-
-for year in sorted(df['year'].unique()):
-    df_year = df[df['year'] == year].sort_values('period')
-
-    # n_dates, n_hours = len(df_year.date.unique()), len(df_year.hour.unique())
-    #
-    # n_timepoints = n_dates * n_hours
-    n_timepoints = len(df_year.period.unique())
-
-    # TODO: Add an assert to check the dataframe is properly sorted before reshaping it into a tensor
-
-    traveltime_data = get_y_tensor(y=df_year[['tt_avg']], n_links=n_links, n_timepoints=n_timepoints)
-    flow_data = get_y_tensor(y=df_year[['counts']], n_links=n_links, n_timepoints=n_timepoints)
-
-    Y[year] = tf.concat([traveltime_data, flow_data], axis=2)
-
-    X[year] = get_design_tensor(Z=df_year[features_Z+['period_id']], n_links=n_links, n_timepoints=n_timepoints)
-
-    tt_ff = get_design_tensor(Z=df_year[['tt_ff']], n_links=n_links, n_timepoints=n_timepoints)
-
-
-len(df.date.unique())
-
-# plt.hist(df_year['tt_avg'])
-#
-# bins = np.linspace(-10, 10, 100)
-
-# plt.hist(df_year['tt_ff'], alpha=0.5, label='free flow travel times')
-# plt.hist(df_year['tt_avg'], alpha=0.5, label='average travel times')
-# plt.legend(loc='upper right')
-# plt.show()
-#
-# plt.scatter(df_year['tt_ff'],df_year['tt_avg'])
-# plt.legend(loc='upper right')
-# plt.show()
-
-# df.tt_ff.mean()
-# df.tt_avg.mean()
 
 # EDA
 
-eda_df = df.copy()
-eda_df['date'] = eda_df['date'].astype(str)
+obs_date = df.groupby('date')['hour'].count()
 
-# Transform to monthly income
-eda_df['median_inc'] = eda_df['median_inc']/12
-
-sns.lineplot(x= 'date', y = 'counts', data =eda_df.groupby('date')[['counts']].mean().reset_index())
-plt.tight_layout()
-plt.xticks(rotation=90)
-plt.show()
-
-
-sns.lineplot(x= 'date', y = 'value', hue = 'variable', data =pd.melt(eda_df.groupby('date')[features_Z].mean().reset_index(),id_vars= ['date']))
-plt.tight_layout()
-plt.xticks(rotation=90)
+df.groupby('date')[['speed_sd','speed_avg', 'counts']].mean().assign(total_obs = obs_date)
+#
+# eda_df = df.copy()
+# eda_df['date'] = eda_df['date'].astype(str)
+#
+# # Transform to monthly income
+# eda_df['median_inc'] = eda_df['median_inc']/12
+#
+# sns.lineplot(x= 'date', y = 'counts', data =eda_df.groupby('date')[['counts']].mean().reset_index())
+# plt.tight_layout()
+# plt.xticks(rotation=90)
 # plt.show()
-
-sns.lineplot(x= 'date', y = 'speed_avg', data =eda_df.groupby('date')[['speed_avg']].mean().reset_index())
-plt.tight_layout()
-plt.xticks(rotation=90)
+#
+#
+# sns.lineplot(x= 'date', y = 'value', hue = 'variable', data =pd.melt(eda_df.groupby('date')[features_Z].mean().reset_index(),id_vars= ['date']))
+# plt.tight_layout()
+# plt.xticks(rotation=90)
+# # plt.show()
+#
+# sns.lineplot(x= 'date', y = 'speed_avg', data =eda_df.groupby('date')[['speed_avg']].mean().reset_index())
+# plt.tight_layout()
+# plt.xticks(rotation=90)
+# # plt.show()
 # plt.show()
-plt.show()
-
-print(eda_df.groupby('date')[features_Z].mean())
-
-print(df.groupby('date')[['tt_avg', 'tt_sd', 'tt_ff']].mean())
+#
+# print(eda_df.groupby('date')[features_Z].mean())
+#
+# print(df.groupby('date')[['tt_avg', 'tt_sd', 'tt_ff']].mean())
 
 # Link flows by hour
 # eda_df = df.copy()
@@ -259,29 +241,40 @@ print(df.groupby('date')[['tt_avg', 'tt_sd', 'tt_ff']].mean())
 #              data =eda_df.groupby(['hour','link_key'])[['speed_sd']].mean().reset_index())
 # plt.show()
 
+ # plt.hist(df_year['tt_avg'])
+#
+# bins = np.linspace(-10, 10, 100)
 
+# plt.hist(df_year['tt_ff'], alpha=0.5, label='free flow travel times')
+# plt.hist(df_year['tt_avg'], alpha=0.5, label='average travel times')
+# plt.legend(loc='upper right')
+# plt.show()
+#
+# plt.scatter(df_year['tt_ff'],df_year['tt_avg'])
+# plt.legend(loc='upper right')
+# plt.show()
 
 ## Training and validation sets
 
-# We only pick data from one year
-# X = X[2019]
-# Y = Y[2019]
-
-# Prepare the training and validation dataset
-# X, Y = tf.concat(X,axis = 0), tf.concat(Y,axis = 0)
+# Include only data between 4pm and 5pm
+X, Y = get_tensors_by_year(df[df.hour == 16], features_Z = features_Z)
+# Include hourly data between 6AM and 8PM (15 hour intervals)
+XT, YT = get_tensors_by_year(df, features_Z = features_Z)
 
 # Split to comply with temporal ordering
-# X_train, X_test, Y_train, Y_test = temporal_split(X.numpy(), Y.numpy(), n_days = X.shape[0])
+# X_train, X_test, Y_train, Y_test = temporal_split(X[2019].numpy(), Y[2019].numpy(), n_days = X[2019].shape[0])
 
-# X_train, X_test, Y_train, Y_test = train_test_split(X.numpy(), Y.numpy(), test_size=0.5, random_state=_SEED)
-X_train, X_test, Y_train, Y_test = X[2019], X[2020], Y[2019], Y[2020]
 # X_train, X_test, Y_train, Y_test = X[2020], X[2019], Y[2020], Y[2019]
+X_train, X_test, Y_train, Y_test = X[2019], X[2020], Y[2019], Y[2020]
+XT_train, XT_test, YT_train, YT_test = XT[2019], XT[2020], YT[2019], YT[2020]
 
+# Remove validation set to reduce computation costs
 X_test, Y_test = None, None
+XT_test, YT_test = None, None
 
 #Models
-run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe-2', 'tvodlulpe'], True)
-# run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe-2', 'tvodlulpe'], False)
+# run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe-2', 'tvodlulpe'], True)
+run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe-2', 'tvodlulpe'], False)
 
 # run_model.update(dict.fromkeys(['lue', 'odlue', 'odlulpe'], True))
 # run_model = dict.fromkeys( for i in ['lue', 'odlue', 'odlulpe'], True)
@@ -290,7 +283,7 @@ run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','od
 # run_model['odlue'] = True
 # run_model['odlulpe-1'] = True
 # run_model['odlulpe-2'] = True
-# run_model['tvodlulpe'] = True
+run_model['tvodlulpe'] = True
 
 train_results_dfs = {}
 test_results_dfs = {}
@@ -301,7 +294,7 @@ _BATCH_SIZE = None
 _LR = 5e-1
 _RELATIVE_GAP = 1e-5
 _XTICKS_SPACING = 50
-_EPOCHS_PRINT_INTERVAL = 10
+_EPOCHS_PRINT_INTERVAL = 1
 
 _LOSS_METRIC  = mnrmse
 
@@ -888,6 +881,8 @@ if run_model['odlulpe-2']:
 if run_model['tvodlulpe']:
     print('\ntvodlulpe: Time specific utility and OD, link performance parameters, no historic OD')
 
+    optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
+
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
                                            initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
@@ -895,6 +890,7 @@ if run_model['tvodlulpe']:
                                            signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
                                                   'bus_stops': '-', 'intersections': '-'},
                                            trainables={'psc_factor': False, 'fixed_effect': True},
+                                           time_varying=True,
                                            )
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
@@ -907,6 +903,7 @@ if run_model['tvodlulpe']:
                                  initial_values=fresno_network.q.flatten(),
                                  true_values=fresno_network.q.flatten(),
                                  historic_values={1: fresno_network.q.flatten()},
+                                 # time_varying=True,
                                  trainable=True)
 
     tvodlulpe = GISUELOGIT(
@@ -916,11 +913,11 @@ if run_model['tvodlulpe']:
         utility=utility_parameters,
         bpr=bpr_parameters,
         od=od_parameters,
-        n_periods = len(np.unique(X_train[:,:,-1].numpy().flatten()))
+        n_periods = len(np.unique(XT_train[:,:,-1].numpy().flatten()))
     )
 
     train_results_dfs['tvodlulpe'], test_results_dfs['tvodlulpe'] = tvodlulpe.train(
-        X_train, Y_train, X_test, Y_test,
+        XT_train, YT_train, XT_test, YT_test,
         optimizer=optimizer,
         # generalization_error={'train': False, 'validation': True},
         batch_size=_BATCH_SIZE,
