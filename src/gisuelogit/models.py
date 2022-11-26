@@ -550,8 +550,8 @@ class GISUELOGIT(tf.keras.Model):
     def theta(self):
         theta = self.project_theta(tf.stack(self._theta,axis = 1))
 
-        if self.utility.n_periods>1:
-            theta = tf.experimental.numpy.take(theta,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
+        # if self.utility.n_periods>1:
+        theta = tf.experimental.numpy.take(theta,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
 
         return theta
 
@@ -600,7 +600,8 @@ class GISUELOGIT(tf.keras.Model):
         """ TODO: Make the einsum operation in one line"""
 
         self.period_ids = X[:, :, -1]
-        theta = tf.experimental.numpy.take(self.theta,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
+        # theta = tf.experimental.numpy.take(self.theta,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
+        theta = self.theta
 
         if tf.rank(theta) == 1:
             # return tf.einsum("ijkl,l -> ijk", X, self.theta[1:])+ self.theta[0]*self.traveltimes() + self.fixed_effect
@@ -1150,7 +1151,7 @@ class GISUELOGIT(tf.keras.Model):
         total_t0 = time.time()
 
         train_dataset = tf.data.Dataset.from_tensor_slices((X_train, Y_train))
-        train_dataset = train_dataset.shuffle(buffer_size=1024).batch(batch_size)
+        train_dataset = train_dataset.shuffle(buffer_size=X_train.shape[0]).batch(batch_size)
 
         # val_dataset = tf.data.Dataset.from_tensor_slices((X_val, Y_val))
         # val_dataset = val_dataset.batch(batch_size)
@@ -1188,7 +1189,8 @@ class GISUELOGIT(tf.keras.Model):
                 path_flows = self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X_train))))
                 link_flow = self.link_flows(path_flows)
                 relative_x = float(np.nanmean(np.abs(tf.divide(link_flow,self.flows()) - 1)))
-                theta = tf.experimental.numpy.take(self.theta, tf.cast(self.period_ids[:, 0], dtype=tf.int32), 0)
+                #theta = tf.experimental.numpy.take(, tf.cast(self.period_ids[:, 0], dtype=tf.int32), 0)
+                theta = self.theta
 
                 for i in range(X_train.shape[0]):
                     sue_objective = sue_objective_function_fisk(
