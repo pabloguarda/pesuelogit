@@ -148,7 +148,7 @@ def get_tensors_by_year(df, features_Z, network) -> Tuple[Dict[str, tf.Tensor],D
     X,Y = {}, {}
 
     for year in sorted(df['year'].unique()):
-        df_year = df[df['year'] == year].sort_values(['date', 'hour']).copy()
+        df_year = df[df['year'] == year] #.sort_values(['date', 'hour']).copy()
 
         # n_dates, n_hours = len(df_year.date.unique()), len(df_year.hour.unique())
         #
