@@ -132,7 +132,13 @@ df.loc[(df.link_type == "LWRLK") & (df.speed_ref_avg == 0),'tt_ff'] = float('nan
 df['tt_avg'] = np.where(df['link_type'] != 'LWRLK', 0,df['length']/df['speed_hist_avg'])
 df.loc[(df.link_type == "LWRLK") & (df.speed_hist_avg == 0),'tt_avg'] = float('nan')
 
+tt_sd_adj = df.groupby(['period_id','link_key','link_type'])[['tt_avg']].std().reset_index().rename(columns = {'tt_avg': 'tt_sd_adj'})
+
+df = df.merge(tt_sd_adj, on = ['period_id','link_key'])
+
 df = data_curation(df)
+
+df['tt_sd'] = df['tt_sd_adj']
 
 ## Utility function
 
@@ -257,10 +263,10 @@ df.groupby('date')[['speed_sd','speed_avg', 'counts']].mean().assign(total_obs =
 ## Training and validation sets
 
 # Include only data between 4pm and 5pm
-X, Y = get_tensors_by_year(df[df.hour == 16], features_Z = features_Z)
+X, Y = get_tensors_by_year(df[df.hour == 16], features_Z = features_Z, network = fresno_network)
 # Include hourly data between 6AM and 8PM (15 hour intervals)
 # XT, YT = get_tensors_by_year(df, features_Z = features_Z)
-XT, YT = get_tensors_by_year(df[df.hour.isin(range(14,18))], features_Z = features_Z)
+XT, YT = get_tensors_by_year(df[df.hour.isin(range(14,18))], features_Z = features_Z, network = fresno_network)
 
 # Split to comply with temporal ordering
 # X_train, X_test, Y_train, Y_test = temporal_split(X[2019].numpy(), Y[2019].numpy(), n_days = X[2019].shape[0])
@@ -275,30 +281,31 @@ X_test, Y_test = None, None
 XT_test, YT_test = None, None
 
 #Models
-# run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe-2', 'tvodlulpe'], True)
-run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe-2', 'tvodlulpe'], False)
+# run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe', 'tvodlulpe'], True)
+run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe', 'tvodlulpe'], False)
 
 # run_model.update(dict.fromkeys(['lue', 'odlue', 'odlulpe'], True))
 # run_model = dict.fromkeys( for i in ['lue', 'odlue', 'odlulpe'], True)
 # run_model['equilibrium'] = True
-run_model['lue'] = True
+# run_model['lue'] = True
 # run_model['odlue'] = True
 # run_model['odlulpe-1'] = True
-# run_model['odlulpe-2'] = True
+# run_model['odlulpe'] = True
 run_model['tvodlulpe'] = True
 
 train_results_dfs = {}
 test_results_dfs = {}
 
-_EPOCHS = {'learning': 10, 'equilibrium': 0}
-# _EPOCHS = {'learning': 500, 'equilibrium': 0}
+# _EPOCHS = {'learning': 10, 'equilibrium': 2}
+_EPOCHS = {'learning': 200, 'equilibrium': 10}
 _BATCH_SIZE = None
 _LR = 5e-1
 _RELATIVE_GAP = 1e-5
 _XTICKS_SPACING = 50
 _EPOCHS_PRINT_INTERVAL = 1
 
-_LOSS_METRIC  = mnrmse
+# _LOSS_METRIC  = mnrmse
+_LOSS_METRIC  = nrmse
 
 # Excluding historic OD gives more freedom for the model to find an equilibria and minimize reconstruction error
 _LOSS_WEIGHTS ={'od': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1}
@@ -572,8 +579,16 @@ if run_model['lue']:
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
 
+    sns.displot(pd.DataFrame({'fixed_effect':np.array(lue.fixed_effect)}),
+            x="fixed_effect", multiple="stack", kind="kde", alpha = 0.8)
+
+    plot_convergence_estimates(estimates=train_results_dfs['lue'].\
+                       assign(rr = train_results_dfs['lue']['tt_sd']/train_results_dfs['lue']['tt'])[['epoch','rr']],
+                           xticks_spacing = _XTICKS_SPACING)
+
     plot_predictive_performance(train_losses=train_results_dfs['lue'], val_losses=test_results_dfs['lue'],
                                 xticks_spacing = _XTICKS_SPACING)
+
 
     plt.show()
 
@@ -653,6 +668,9 @@ if run_model['odlue']:
                            assign(rr = train_results_dfs['odlue']['tt_sd']/train_results_dfs['odlue']['tt'])[['epoch','rr']],
                                xticks_spacing = _XTICKS_SPACING)
 
+    sns.displot(pd.DataFrame({'fixed_effect':np.array(odlue.fixed_effect)}),
+            x="fixed_effect", multiple="stack", kind="kde", alpha = 0.8)
+
     plt.show()
 
     print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlue.theta.numpy())))}")
@@ -663,6 +681,8 @@ if run_model['odlue']:
 if run_model['odlulpe-1']:
 
     print('\nODLULPE: ODLUE + link performance parameters with historic OD matrix (link specifics alpha)')
+
+    # _MOMENTUM_EQUILIBRIUM = 0.99
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
 
@@ -694,16 +714,16 @@ if run_model['odlulpe-1']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-
                                            initial_values={'psc_factor': 0, 'tt':0,
                                                            'fixed_effect': np.zeros_like(fresno_network.links)},
                                            signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
                                                   'bus_stops': '-', 'intersections': '-'},
-                                           trainables={'psc_factor': False, 'fixed_effect': True,
+                                           trainables={'psc_factor': False, 'fixed_effect': _FIXED_EFFECT,
                                                        'tt': True, 'tt_sd': True, 'median_inc': True,
                                                        'incidents': True,
                                                        'bus_stops': True, 'intersections': True
                                                        },
+                                           time_varying = True
                                            )
 
     equilibrator = Equilibrator(
@@ -733,6 +753,7 @@ if run_model['odlulpe-1']:
         utility=utility_parameters,
         bpr=bpr_parameters,
         od=od_parameters,
+        n_periods = len(np.unique(X_train[:,:,-1].numpy().flatten()))
     )
 
     train_results_dfs['odlulpe-1'], test_results_dfs['odlulpe-1'] = odlulpe_1.train(
@@ -740,38 +761,45 @@ if run_model['odlulpe-1']:
         optimizer=optimizer,
         # generalization_error={'train': False, 'validation': True},
         batch_size=_BATCH_SIZE,
-        # loss_weights={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1},
         loss_weights=_LOSS_WEIGHTS,
-        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
+        loss_metric=_LOSS_METRIC,
+        momentum_equilibrium = _MOMENTUM_EQUILIBRIUM['odlulpe-1'],
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
-        loss_metric=_LOSS_METRIC,
         epochs=_EPOCHS)
 
     plot_predictive_performance(train_losses=train_results_dfs['odlulpe-1'], val_losses=test_results_dfs['odlulpe-1'],
                                 xticks_spacing = _XTICKS_SPACING)
 
     plot_convergence_estimates(estimates=train_results_dfs['odlulpe-1'][['epoch','alpha']],
-                               true_values=odlulpe_1.bpr.true_values)
+                                xticks_spacing = _XTICKS_SPACING)
 
     sns.displot(pd.DataFrame({'alpha':odlulpe_1.alpha}),
             x="alpha", multiple="stack", kind="kde", alpha = 0.8)
-    
+
+    # Compute utility parameters over time (heatmap) and value of travel time reliability (lineplot)
+    theta_df = plot_utility_parameters_periods(odlulpe_1, df, period_feature='hour')
+    print(theta_df)
+
+    rr_df = theta_df.apply(compute_rr, axis=1).reset_index().rename(columns={'index': 'hour', 0: 'rr'})
+    sns.lineplot(data=rr_df, x='hour', y="rr")
+
     plot_convergence_estimates(estimates=train_results_dfs['odlulpe-1'].\
-                           assign(rr = train_results_dfs['odlulpe-1']['tt_sd']/train_results_dfs['odlulpe-1']['tt'])[['epoch','rr']],
-                               xticks_spacing = _XTICKS_SPACING)
+                   assign(rr = train_results_dfs['odlulpe-1']['tt_sd']/train_results_dfs['odlulpe-1']['tt'])[['epoch','rr']],
+                       xticks_spacing = _XTICKS_SPACING)
+
+    plt.ylabel('average reliability ratio')
 
     sns.displot(pd.DataFrame({'fixed_effect':np.array(odlulpe_1.fixed_effect)}),
                 x="fixed_effect", multiple="stack", kind="kde", alpha = 0.8)
 
-    plt.show()
-
-    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlulpe_1.theta.numpy())))}")
+    #print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlulpe_1.theta.numpy())))}")
+    print(f"theta:\n\n {theta_df}")
     print(f"alpha = {np.mean(odlulpe_1.alpha): 0.2f}, beta  = {np.mean(odlulpe_1.beta): 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(odlulpe_1.q - fresno_network.q.flatten())): 0.2f}")
     print(f"Avg observed OD: {np.mean(np.abs(fresno_network.q.flatten())): 0.2f}")
 
-if run_model['odlulpe-2']:
+if run_model['odlulpe']:
 
     print('\nODLULPE: ODLUE + link performance parameters with historic OD matrix (link specifics alphas and betas)')
 
@@ -833,8 +861,8 @@ if run_model['odlulpe-2']:
                                        # ods_sampling='demand',
                                        )
 
-    odlulpe_2 = GISUELOGIT(
-        key='odlulpe-2',
+    odlulpe = GISUELOGIT(
+        key='odlulpe',
         network=fresno_network,
         dtype=tf.float64,
         equilibrator=equilibrator,
@@ -844,7 +872,7 @@ if run_model['odlulpe-2']:
         od=od_parameters,
     )
 
-    train_results_dfs['odlulpe-2'], test_results_dfs['odlulpe-2'] = odlulpe_2.train(
+    train_results_dfs['odlulpe'], test_results_dfs['odlulpe'] = odlulpe.train(
         X_train, Y_train, X_test, Y_test,
         optimizer=optimizer,
         # generalization_error={'train': False, 'validation': True},
@@ -857,27 +885,27 @@ if run_model['odlulpe-2']:
         loss_metric=_LOSS_METRIC,
         epochs=_EPOCHS)
 
-    plot_predictive_performance(train_losses=train_results_dfs['odlulpe-2'], val_losses=test_results_dfs['odlulpe-2'],
+    plot_predictive_performance(train_losses=train_results_dfs['odlulpe'], val_losses=test_results_dfs['odlulpe'],
                                 xticks_spacing = _XTICKS_SPACING)
 
-    plot_convergence_estimates(estimates=train_results_dfs['odlulpe-2'][['epoch','alpha','beta']],
+    plot_convergence_estimates(estimates=train_results_dfs['odlulpe'][['epoch','alpha','beta']],
                                 xticks_spacing = _XTICKS_SPACING)
 
-    sns.displot(pd.melt(pd.DataFrame({'alpha':odlulpe_2.alpha, 'beta': odlulpe_2.beta}), var_name = 'parameters'),
+    sns.displot(pd.melt(pd.DataFrame({'alpha':odlulpe.alpha, 'beta': odlulpe.beta}), var_name = 'parameters'),
                 x="value", hue="parameters", multiple="stack", kind="kde", alpha = 0.8)
 
-    plot_convergence_estimates(estimates=train_results_dfs['odlulpe-2'].\
-                           assign(rr = train_results_dfs['odlulpe-2']['tt_sd']/train_results_dfs['odlulpe-2']['tt'])[['epoch','rr']],
+    plot_convergence_estimates(estimates=train_results_dfs['odlulpe'].\
+                           assign(rr = train_results_dfs['odlulpe']['tt_sd']/train_results_dfs['odlulpe']['tt'])[['epoch','rr']],
                                xticks_spacing = _XTICKS_SPACING)
 
-    sns.displot(pd.DataFrame({'fixed_effect':np.array(odlulpe_2.fixed_effect)}),
+    sns.displot(pd.DataFrame({'fixed_effect':np.array(odlulpe.fixed_effect)}),
                 x="fixed_effect", multiple="stack", kind="kde", alpha = 0.8)
 
     plt.show()
 
-    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlulpe_2.theta.numpy())))}")
-    print(f"alpha = {np.mean(odlulpe_2.alpha): 0.2f}, beta  = {np.mean(odlulpe_2.beta): 0.2f}")
-    print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(odlulpe_2.q - fresno_network.q.flatten())): 0.2f}")
+    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlulpe.theta.numpy())))}")
+    print(f"alpha = {np.mean(odlulpe.alpha): 0.2f}, beta  = {np.mean(odlulpe.beta): 0.2f}")
+    print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(odlulpe.q - fresno_network.q.flatten())): 0.2f}")
     print(f"Avg observed OD: {np.mean(np.abs(fresno_network.q.flatten())): 0.2f}")
 
 if run_model['tvodlulpe']:
@@ -892,7 +920,7 @@ if run_model['tvodlulpe']:
                                            signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
                                                   'bus_stops': '-', 'intersections': '-'},
                                            trainables={'psc_factor': False, 'fixed_effect': True},
-                                           # time_varying=True,
+                                           time_varying=True,
                                            )
 
     bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
@@ -959,7 +987,7 @@ if run_model['tvodlulpe']:
 
     plt.show()
     
-    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(tvodlulpe.theta.numpy())))}")
+    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(np.mean(tvodlulpe.theta.numpy(),axis = 0))))}")
     print(f"alpha = {np.mean(tvodlulpe.alpha): 0.2f}, beta  = {np.mean(tvodlulpe.beta): 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(tvodlulpe.q - fresno_network.q.flatten())): 0.2f}")
     print(f"Avg observed OD: {np.mean(np.abs(fresno_network.q.flatten())): 0.2f}")
@@ -975,7 +1003,7 @@ val_results_df.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')
 
 ## Summary of models parameters
 
-models = [lue,odlue,odlulpe_1,odlulpe_2, tvodlulpe]
+models = [lue,odlue,odlulpe_1,odlulpe, tvodlulpe]
 results = pd.DataFrame({'parameter': [], 'model': []})
 
 for model in models:
@@ -1012,7 +1040,7 @@ print(results_losses[['model'] + loss_columns].round(1))
 
 ## Plot of convergence toward true rr across models
 
-models = [lue,odlue,odlulpe_1,odlulpe_2, tvodlulpe]
+models = [lue,odlue,odlulpe_1,odlulpe, tvodlulpe]
 
 train_estimates = {}
 train_losses = {}

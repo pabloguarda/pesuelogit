@@ -747,13 +747,13 @@ class GISUELOGIT(tf.keras.Model):
 
         # return tf.clip_by_value(self._alpha, self._epsilon, 1e10)
         # return tf.exp(self._alpha)
-        return tf.clip_by_value(tf.exp(self._alpha), 0, 2)
+        return tf.clip_by_value(tf.exp(self._alpha), 0, 8)
         # return tf.clip_by_value(tf.math.pow(self._alpha,2),0,1e10)
 
     @property
     def beta(self):
         # return tf.clip_by_value(self._beta, self._epsilon, 10)
-        return tf.clip_by_value(tf.exp(self._beta),0,8)
+        return tf.clip_by_value(tf.exp(self._beta),1,8)
         # return tf.clip_by_value(self._beta, 1, 5)
         # return tf.exp(self._beta)
 
@@ -1396,7 +1396,6 @@ class GISUELOGIT(tf.keras.Model):
             #.assign(loss_eq_flow = train_losses_df['loss_eq_flow'])
             val_results_df[losses_columns] = self.normalized_losses(val_results_df[losses_columns])
             #.assign(loss_eq_flow = val_losses_df['loss_eq_flow'])
-
 
         return train_results_df, val_results_df
 

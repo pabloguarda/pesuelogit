@@ -44,7 +44,7 @@ tntp_network.load_OD(Q=Q)
 # Paths
 load_k_shortest_paths(network=tntp_network, k=2, update_incidence_matrices=True)
 
-n_days = 100
+n_days = 200
 n_links = len(tntp_network.links)
 features_Z = ['tt_sd', 's']
 

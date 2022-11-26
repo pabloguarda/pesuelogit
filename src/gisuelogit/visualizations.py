@@ -253,15 +253,17 @@ def plot_top_od_flows_periods(model, df, period_feature, top_k = 10):
         if model.q.shape[0] > 1:
             label_period_feature = period_keys[period_keys['period_id'] == j][period_feature]
         else:
-            label_period_feature_1 = period_keys[period_keys['period_id'] == period_ids[0]][period_feature]
-            label_period_feature_2 = period_keys[period_keys['period_id'] == period_ids[-1]][period_feature]
+            label_period_feature_1 = period_keys[period_keys['period_id'] == period_ids[0]][period_feature].values[0]
+            label_period_feature_2 = period_keys[period_keys['period_id'] == period_ids[-1]][period_feature].values[0]
             label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
 
         q_df = q_df.append(pd.DataFrame(q_dict, index=[label_period_feature]))
 
     top_q = q_df[q_df.var().sort_values(ascending=False)[0:top_k].index].sort_index()
 
-    sns.heatmap(top_q.transpose(), linewidth=0.5, cmap="Blues", vmin=0)
+    fig, ax = plt.subplots()
+
+    sns.heatmap(top_q.transpose(), linewidth=0.5, cmap="Blues", vmin=0, ax = ax)
 
     plt.xlabel(period_feature, fontsize=12)
     plt.ylabel('od pair', fontsize=12)
@@ -283,8 +285,6 @@ def plot_utility_parameters_periods(model, df, period_feature, include_vot = Fal
         if include_vot:
             theta_dict['vot'] = float(compute_rr(theta_dict))
 
-        label_period_feature = f"{period_ids[0]}-{period_ids[-1]}"
-
         if model.theta.shape[0]> 1:
             label_period_feature = period_keys[period_keys['period_id'] == j][period_feature]
         else:
@@ -305,8 +305,10 @@ def plot_utility_parameters_periods(model, df, period_feature, include_vot = Fal
     cmap = sns.diverging_palette(10, 133, as_cmap=True)
     bound = np.nanmax(theta_df.abs().values)
 
+    fig, ax = plt.subplots()
+
     sns.heatmap(theta_df.transpose(), linewidth=0.5, cmap=cmap,
-                vmin = -bound, vmax = bound)
+                vmin = -bound, vmax = bound, ax = ax)
 
     plt.xlabel(period_feature, fontsize=12)
     plt.ylabel('parameter', fontsize=12)

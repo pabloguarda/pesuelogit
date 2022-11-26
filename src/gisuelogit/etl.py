@@ -29,7 +29,7 @@ def simulate_features(n_days, daytoday_variation = False, **kwargs):
 
 def convert_multiperiod_df_to_tensor(df, n_timepoints: int, n_links: int, features: List[str]):
     '''
-    Convert to a tensor of dimensions (n_timepoints, n_hours, n_links, n_features).
+    Convert to a tensor of dimensions (n_timepoints, n_links, n_features).
     df is a dataframe that contains the feature data
     '''
 
@@ -143,12 +143,12 @@ def add_period_id(df: pd.DataFrame, period_feature: str = None, varname = 'perio
     return df
 
 
-def get_tensors_by_year(df, features_Z) -> Tuple[Dict[str, tf.Tensor],Dict[str, tf.Tensor]]:
+def get_tensors_by_year(df, features_Z, network) -> Tuple[Dict[str, tf.Tensor],Dict[str, tf.Tensor]]:
     n_links = len(df.link_key.unique())
     X,Y = {}, {}
 
     for year in sorted(df['year'].unique()):
-        df_year = df[df['year'] == year].sort_values(['date', 'hour'])
+        df_year = df[df['year'] == year].sort_values(['date', 'hour']).copy()
 
         # n_dates, n_hours = len(df_year.date.unique()), len(df_year.hour.unique())
         #
@@ -156,6 +156,9 @@ def get_tensors_by_year(df, features_Z) -> Tuple[Dict[str, tf.Tensor],Dict[str, 
         n_timepoints = len(df_year[['date', 'hour']].drop_duplicates())
 
         # TODO: Add an assert to check the dataframe is properly sorted before reshaping it into a tensor
+        df_year['link_key'] = df_year['link_key'].astype(str)
+        df_year['link_key'] = pd.Categorical(df_year['link_key'], map(str,list(network.links_dict.keys())))
+        df_year = df_year.sort_values(['period','link_key'])
 
         traveltime_data = get_y_tensor(y=df_year[['tt_avg']], n_links=n_links, n_timepoints=n_timepoints)
         flow_data = get_y_tensor(y=df_year[['counts']], n_links=n_links, n_timepoints=n_timepoints)
@@ -209,7 +212,7 @@ def data_curation(raw_data: pd.DataFrame):
 
     raw_data.loc[raw_data['counts'] <= 0, "counts"] = np.nan
 
-    # Replace free flow travel times with nans
+    # Replace values of free flow travel times that had nans
     indices = (raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'].isna())
 
     # with travel time reported in original nework files
@@ -220,11 +223,22 @@ def data_curation(raw_data: pd.DataFrame):
 
     # raw_data = traveltime_imputation(raw_data)
 
-    raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'] == 0), 'tt_ff'] \
-        = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'] != 0), 'tt_ff'].mean()
+    # Imputation
 
-    raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] == 0), 'tt_avg'] \
-        = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] != 0), 'tt_avg'].mean()
+    for feature in ['tt_ff', 'tt_avg']:
+        if feature in raw_data.columns:
+            raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data[feature] == 0), feature] \
+                = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data[feature] != 0), feature].mean()
+            raw_data.loc[(raw_data['link_type'] != 'LWRLK'), feature] = 0
+
+    for feature in ['tt_sd','tt_sd_adj']:
+        if feature in raw_data.columns:
+            raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data[feature].isna()), feature] \
+                = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (~raw_data[feature].isna()), feature].mean()
+            raw_data.loc[(raw_data['link_type'] != 'LWRLK'), feature] = 0
+
+    # raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] == 0), 'tt_avg'] \
+    #     = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] != 0), 'tt_avg'].mean()
 
     #raw_data[['tt_ff', 'tt_avg', 'tt_avg_imputed', 'link_type']]#
 
