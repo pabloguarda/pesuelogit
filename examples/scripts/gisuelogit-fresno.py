@@ -26,7 +26,7 @@ isl.config.dirs['read_network_data'] = "input/network-data/fresno/"
 
 # Internal modules
 from src.gisuelogit.models import UtilityParameters, BPRParameters, ODParameters, GISUELOGIT, NGD, compute_rr
-from src.gisuelogit.visualizations import plot_predictive_performance, plot_convergence_estimates, plot_utility_parameters_periods, plot_top_od_flows_periods
+from src.gisuelogit.visualizations import plot_predictive_performance, plot_convergence_estimates, plot_utility_parameters_periods, plot_top_od_flows_periods, plot_rr_by_period
 from src.gisuelogit.networks import load_k_shortest_paths, read_paths, build_fresno_network, \
     Equilibrator, sparsify_OD, ColumnGenerator, read_OD
 from src.gisuelogit.etl import get_design_tensor, get_y_tensor, data_curation, temporal_split, add_period_id, get_tensors_by_year
@@ -132,7 +132,7 @@ df.loc[(df.link_type == "LWRLK") & (df.speed_ref_avg == 0),'tt_ff'] = float('nan
 df['tt_avg'] = np.where(df['link_type'] != 'LWRLK', 0,df['length']/df['speed_hist_avg'])
 df.loc[(df.link_type == "LWRLK") & (df.speed_hist_avg == 0),'tt_avg'] = float('nan')
 
-tt_sd_adj = df.groupby(['period_id','link_key','link_type'])[['tt_avg']].std().reset_index().rename(columns = {'tt_avg': 'tt_sd_adj'})
+tt_sd_adj = df.groupby(['period_id','link_key'])[['tt_avg']].std().reset_index().rename(columns = {'tt_avg': 'tt_sd_adj'})
 
 df = df.merge(tt_sd_adj, on = ['period_id','link_key'])
 
@@ -266,8 +266,8 @@ df.groupby('date')[['speed_sd','speed_avg', 'counts']].mean().assign(total_obs =
 X, Y = get_tensors_by_year(df[df.hour == 16], features_Z = features_Z, network = fresno_network)
 # Include hourly data between 6AM and 8PM (15 hour intervals)
 # XT, YT = get_tensors_by_year(df, features_Z = features_Z)
-XT, YT = get_tensors_by_year(df[df.hour.isin(range(14,18))], features_Z = features_Z, network = fresno_network)
-
+# XT, YT = get_tensors_by_year(df[df.hour.isin(range(14,18))], features_Z = features_Z, network = fresno_network)
+XT, YT = get_tensors_by_year(df[df.hour.isin([6,7,8, 15,16,17])], features_Z = features_Z, network = fresno_network)
 # Split to comply with temporal ordering
 # X_train, X_test, Y_train, Y_test = temporal_split(X[2019].numpy(), Y[2019].numpy(), n_days = X[2019].shape[0])
 
@@ -275,14 +275,13 @@ XT, YT = get_tensors_by_year(df[df.hour.isin(range(14,18))], features_Z = featur
 X_train, X_test, Y_train, Y_test = X[2019], X[2020], Y[2019], Y[2020]
 XT_train, XT_test, YT_train, YT_test = XT[2019], XT[2020], YT[2019], YT[2020]
 
-
 # Remove validation set to reduce computation costs
 X_test, Y_test = None, None
 XT_test, YT_test = None, None
 
 #Models
 # run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe', 'tvodlulpe'], True)
-run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe', 'tvodlulpe'], False)
+run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','odlulpe', 'tvodlulpe', 'test_tvodlulpe'], False)
 
 # run_model.update(dict.fromkeys(['lue', 'odlue', 'odlulpe'], True))
 # run_model = dict.fromkeys( for i in ['lue', 'odlue', 'odlulpe'], True)
@@ -292,13 +291,15 @@ run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','od
 # run_model['odlulpe-1'] = True
 # run_model['odlulpe'] = True
 run_model['tvodlulpe'] = True
+# run_model['test_tvodlulpe'] = True
 
 train_results_dfs = {}
 test_results_dfs = {}
 
-# _EPOCHS = {'learning': 10, 'equilibrium': 2}
-_EPOCHS = {'learning': 200, 'equilibrium': 10}
-_BATCH_SIZE = None
+# For testing
+_EPOCHS = {'learning': 4, 'equilibrium': 2}
+# _EPOCHS = {'learning': 200, 'equilibrium': 10}
+_BATCH_SIZE = 16
 _LR = 5e-1
 _RELATIVE_GAP = 1e-5
 _XTICKS_SPACING = 50
@@ -915,11 +916,16 @@ if run_model['tvodlulpe']:
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
+                                           initial_values={'tt': -1, 'tt_sd': -1, 's': 0, 'psc_factor': 0,
                                                            'fixed_effect': np.zeros_like(fresno_network.links)},
                                            signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
                                                   'bus_stops': '-', 'intersections': '-'},
-                                           trainables={'psc_factor': False, 'fixed_effect': True},
+                                           # trainables={'psc_factor': False, 'fixed_effect': True},
+                                           trainables={'psc_factor': False, 'fixed_effect': True,
+                                                       'tt': True, 'tt_sd': True,
+                                                       'median_inc': False, 'incidents': False,
+                                                       'bus_stops': False, 'intersections': False
+                                                       },
                                            time_varying=True,
                                            )
 
@@ -958,7 +964,10 @@ if run_model['tvodlulpe']:
         epochs=_EPOCHS)
 
     # Plot heatmap with flows of top od pairs
-    plot_top_od_flows_periods(tvodlulpe, df, period_feature='hour', top_k=20)
+    plot_top_od_flows_periods(tvodlulpe,
+                              historic_od= fresno_network.q.flatten(),
+                              period_keys = period_keys,
+                              period_feature='hour', top_k=20)
 
     plot_predictive_performance(train_losses=train_results_dfs['tvodlulpe'], val_losses=test_results_dfs['tvodlulpe'],
                                xticks_spacing=_XTICKS_SPACING)
@@ -972,15 +981,9 @@ if run_model['tvodlulpe']:
     plt.show()
 
     # Compute utility parameters over time (heatmap) and value of travel time reliability (lineplot)
-    theta_df = plot_utility_parameters_periods(tvodlulpe, df, period_feature='hour')
+    theta_df = plot_utility_parameters_periods(tvodlulpe, period_keys = period_keys, period_feature='hour')
 
-    plt.show()
-
-    rr_df = theta_df.apply(compute_rr, axis=1).reset_index().rename(columns={'index': 'hour', 0: 'rr'})
-
-    sns.lineplot(data=rr_df, x='hour', y="rr")
-
-    plt.show()
+    plot_rr_by_period(theta_df)
 
     sns.displot(pd.DataFrame({'fixed_effect': np.array(tvodlulpe.fixed_effect)}),
                 x="fixed_effect", multiple="stack", kind="kde", alpha=0.8)
@@ -991,6 +994,95 @@ if run_model['tvodlulpe']:
     print(f"alpha = {np.mean(tvodlulpe.alpha): 0.2f}, beta  = {np.mean(tvodlulpe.beta): 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(tvodlulpe.q - fresno_network.q.flatten())): 0.2f}")
     print(f"Avg observed OD: {np.mean(np.abs(fresno_network.q.flatten())): 0.2f}")
+
+if run_model['test_tvodlulpe']:
+    print('\ntvodlulpe: Time specific utility and OD, link performance parameters, no historic OD')
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
+
+    utility_parameters = UtilityParameters(features_Y=['tt'],
+                                           features_Z=features_Z,
+                                           initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
+                                                           'fixed_effect': np.zeros_like(fresno_network.links)},
+                                           signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
+                                                  'bus_stops': '-', 'intersections': '-'},
+                                           # trainables={'psc_factor': False, 'fixed_effect': True},
+                                           trainables={'psc_factor': False, 'fixed_effect': True,
+                                                       'tt': True, 'tt_sd': True,
+                                                       'median_inc': False, 'incidents': False,
+                                                       'bus_stops': False, 'intersections': False
+                                                       },
+                                           time_varying=True,
+                                           )
+
+    bpr_parameters = BPRParameters(keys=['alpha', 'beta'],
+                                   initial_values={'alpha': 0.15 * np.ones_like(fresno_network.links, dtype=np.float32),
+                                                   'beta': 4 * np.ones_like(fresno_network.links, dtype=np.float32)},
+                                   trainables={'alpha': True, 'beta': True},
+                                   )
+
+    od_parameters = ODParameters(key='od',
+                                 initial_values=fresno_network.q.flatten(),
+                                 true_values=fresno_network.q.flatten(),
+                                 historic_values={1: fresno_network.q.flatten()},
+                                 time_varying=True,
+                                 trainable=True)
+
+    test_tvodlulpe = GISUELOGIT(
+        key='test_tvodlulpe',
+        network=fresno_network,
+        dtype=tf.float64,
+        utility=utility_parameters,
+        bpr=bpr_parameters,
+        od=od_parameters,
+        n_periods=1)
+
+    random_period = np.random.choice(range(XT_train.shape[0]))
+
+    train_results_dfs['test_tvodlulpe'], test_results_dfs['test_tvodlulpe'] = test_tvodlulpe.train(
+        tf.expand_dims(XT_train[random_period,:,:],0), tf.expand_dims(YT_train[random_period,:,:],0), XT_test, YT_test,
+        optimizer=optimizer,
+        # generalization_error={'train': False, 'validation': True},
+        batch_size=_BATCH_SIZE,
+        loss_weights=_LOSS_WEIGHTS,
+        loss_metric=_LOSS_METRIC,
+        momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
+        threshold_relative_gap=_RELATIVE_GAP,
+        epochs=_EPOCHS)
+
+    # Plot heatmap with flows of top od pairs
+    plot_top_od_flows_periods(test_tvodlulpe,
+                              historic_od= fresno_network.q.flatten(),
+                              period_feature='hour', top_k=20)
+
+    plot_predictive_performance(train_losses=train_results_dfs['test_tvodlulpe'], val_losses=test_results_dfs['test_tvodlulpe'],
+                                xticks_spacing=_XTICKS_SPACING)
+
+    plot_convergence_estimates(estimates=train_results_dfs['test_tvodlulpe'][['epoch', 'alpha', 'beta']],
+                               xticks_spacing=_XTICKS_SPACING)
+
+    sns.displot(pd.melt(pd.DataFrame({'alpha': test_tvodlulpe.alpha, 'beta': test_tvodlulpe.beta}), var_name='parameters'),
+                x="value", hue="parameters", multiple="stack", kind="kde", alpha=0.8)
+
+    plt.show()
+
+    # Compute utility parameters over time (heatmap) and value of travel time reliability (lineplot)
+    theta_df = plot_utility_parameters_periods(test_tvodlulpe, period_feature='hour')
+
+    plot_rr_by_period(theta_df)
+
+    sns.displot(pd.DataFrame({'fixed_effect': np.array(test_tvodlulpe.fixed_effect)}),
+                x="fixed_effect", multiple="stack", kind="kde", alpha=0.8)
+
+    plt.show()
+
+    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(np.mean(test_tvodlulpe.theta.numpy(), axis=0))))}")
+    print(f"alpha = {np.mean(test_tvodlulpe.alpha): 0.2f}, beta  = {np.mean(test_tvodlulpe.beta): 0.2f}")
+    print(
+        f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(test_tvodlulpe.q - fresno_network.q.flatten())): 0.2f}")
+    print(f"Avg observed OD: {np.mean(np.abs(fresno_network.q.flatten())): 0.2f}")
+
+
 
 ## Write csv file with estimation results
 

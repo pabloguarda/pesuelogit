@@ -48,6 +48,20 @@ def plot_convergence_estimates(estimates: pd.DataFrame,
 
     return fig, ax
 
+def plot_rr_by_period(theta_df):
+
+    rr_df = theta_df.assign(rr=theta_df.apply(compute_rr, axis=1)).reset_index()[['rr', 'hour']]
+    rr_df['hour'] = pd.Categorical(rr_df['hour'], ordered=True)
+    rr_df = rr_df.sort_values('hour')
+
+    fig, ax = plt.subplots()
+
+    ax.plot(rr_df['hour'], rr_df['rr'])
+    ax.set_xlabel('epoch')
+    ax.set_ylabel('reliability ratio')
+
+
+
 def plot_predictive_performance(train_losses: pd.DataFrame,
                                 val_losses: pd.DataFrame = None,
                                 xticks_spacing: int = 5,
@@ -235,79 +249,105 @@ def plot_levels_experiment(results: pd.DataFrame,
     # self.save_fig(fig, folder, 'inference_summary')
 
 
-def plot_top_od_flows_periods(model, df, period_feature, top_k = 10):
+def plot_top_od_flows_periods(model, period_feature, period_keys, top_k = 10, historic_od = None):
 
     """
     Plot top od pairs according to the variation of the od flows over time periods
     """
 
-    period_keys = df[[period_feature, 'period_id']].drop_duplicates()
-
-    period_ids = list(map(int, np.sort(np.unique(model.original_period_ids[:, 0]))))
-
     q_df = pd.DataFrame({})
-    for i, j in zip(range(model.q.shape[0]),period_ids):
+    for i in range(model.q.shape[0]):
         # q_dict = dict(zip(fresno_network.ods, list(tvodlulpe.q[i].numpy())))
         q_dict = dict(zip(model.triplist, list(model.q[i].numpy())))
 
-        if model.q.shape[0] > 1:
-            label_period_feature = period_keys[period_keys['period_id'] == j][period_feature]
-        else:
-            label_period_feature_1 = period_keys[period_keys['period_id'] == period_ids[0]][period_feature].values[0]
-            label_period_feature_2 = period_keys[period_keys['period_id'] == period_ids[-1]][period_feature].values[0]
-            label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
+        label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]]['hour'])
+        label_period_feature_2 = label_period_feature_1+1
+
+        label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
 
         q_df = q_df.append(pd.DataFrame(q_dict, index=[label_period_feature]))
 
-    top_q = q_df[q_df.var().sort_values(ascending=False)[0:top_k].index].sort_index()
+    q_df = q_df.transpose()
+
+    if historic_od is not None:
+        q_df.insert(loc = 0, column = 'historic_od', value = historic_od)
+
+
+    # top_q = q_df.loc[q_df.var(axis = 1).sort_values(ascending=False)[0:top_k].index].sort_index()
+
+    top_q = q_df.loc[q_df['historic_od'].sort_values(ascending=False)[0:top_k].index].sort_index()
 
     fig, ax = plt.subplots()
 
-    sns.heatmap(top_q.transpose(), linewidth=0.5, cmap="Blues", vmin=0, ax = ax)
+    sns.heatmap(top_q, linewidth=0.5, cmap="Blues", vmin=0, ax = ax)
 
     plt.xlabel(period_feature, fontsize=12)
     plt.ylabel('od pair', fontsize=12)
 
     # plt.show()
 
-    return top_q
+    # Plot total trips by hour
 
-def plot_utility_parameters_periods(model, df, period_feature, include_vot = False):
+    total_trips_by_hour = q_df.sum(axis=0)[1:].reset_index().rename(columns = {'index': 'hour', 0: 'total_trips'})
 
-    period_keys = df[[period_feature, 'period_id']].drop_duplicates()
+    fig, ax = plt.subplots()
 
-    period_ids = list(map(int,np.sort(np.unique(model.original_period_ids[:, 0]))))
+    if total_trips_by_hour.shape[0] > 1:
+        g = sns.lineplot(data = total_trips_by_hour, x = 'hour', y = 'total_trips', linewidth=0.5, ax = ax, label = 'estimated ODs')
+
+    else:
+        g = sns.lineplot(data = total_trips_by_hour, x = 'hour', y = 'total_trips', linewidth=0.5, ax = ax)
+
+        g.axhline(total_trips_by_hour['total_trips'].values[0], label = 'estimated od', linestyle='solid')
+
+
+    g.axhline(q_df.sum(axis=0)[0], label = 'historic od', linestyle='dashed')
+    plt.ylabel('total trips', fontsize=12)
+
+    ax.legend()
+
+    # plt.show()
+
+    # plt.xlabel(period_feature, fontsize=12)
+    # plt.ylabel('od pair', fontsize=12)
+
+    return top_q, total_trips_by_hour
+
+def plot_utility_parameters_periods(model, period_keys, period_feature, include_vot = False):
 
     theta_df = pd.DataFrame({})
-    for i,j in zip(range(model.theta.shape[0]), period_ids):
+
+    for i in range(model.theta.shape[0]):
         theta_dict = dict(zip(model.utility.features, list(model.theta[i].numpy())))
 
         if include_vot:
             theta_dict['vot'] = float(compute_rr(theta_dict))
 
-        if model.theta.shape[0]> 1:
-            label_period_feature = period_keys[period_keys['period_id'] == j][period_feature]
-        else:
-            label_period_feature_1 = period_keys[period_keys['period_id'] == period_ids[0]][period_feature].values[0]
-            label_period_feature_2 = period_keys[period_keys['period_id'] == period_ids[-1]][period_feature].values[0]
-            label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
+        label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]]['hour'])
+        label_period_feature_2 = label_period_feature_1 + 1
+
+        label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
+
+        theta_dict['hour'] = label_period_feature_1
 
         theta_df = theta_df.append(pd.DataFrame(theta_dict, index=[label_period_feature]))
+
 
     if include_vot:
         theta_df[theta_df['vot'].isna()] = 0
 
-    theta_df = theta_df.sort_index()
+    theta_df = theta_df.sort_values('hour')
 
     cols = theta_df.columns
     theta_df[cols] = theta_df[cols].apply(pd.to_numeric, errors='coerce')
 
     cmap = sns.diverging_palette(10, 133, as_cmap=True)
-    bound = np.nanmax(theta_df.abs().values)
+    bound = np.nanmax(theta_df[[i for i in theta_df.columns if i!=period_feature]].abs().values)
 
     fig, ax = plt.subplots()
 
-    sns.heatmap(theta_df.transpose(), linewidth=0.5, cmap=cmap,
+    sns.heatmap(theta_df[[i for i in theta_df.columns if i!=period_feature]].transpose(),
+                linewidth=0.5, cmap=cmap,
                 vmin = -bound, vmax = bound, ax = ax)
 
     plt.xlabel(period_feature, fontsize=12)

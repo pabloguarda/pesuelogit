@@ -517,7 +517,15 @@ class GISUELOGIT(tf.keras.Model):
 
     @property
     def fixed_effect(self):
-        return self._fixed_effect
+
+        # Apply mask for links that are not of type LWLK
+        k = np.array([link.bpr.k for link in self.network.links])
+        k_threshold = 1e5
+
+        mask1 = np.where((k >= k_threshold), 1, 0)
+        mask2 = np.where((self.tt_ff == 0), 1, 0)
+
+        return (1-mask2)*(1-mask1)*self._fixed_effect
 
     def project_theta(self, theta):
         clips_min = []
@@ -551,7 +559,8 @@ class GISUELOGIT(tf.keras.Model):
         theta = self.project_theta(tf.stack(self._theta,axis = 1))
 
         # if self.utility.n_periods>1:
-        theta = tf.experimental.numpy.take(theta,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
+        # if augmented:
+        #     theta = tf.experimental.numpy.take(theta,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
 
         return theta
 
@@ -600,8 +609,8 @@ class GISUELOGIT(tf.keras.Model):
         """ TODO: Make the einsum operation in one line"""
 
         self.period_ids = X[:, :, -1]
-        # theta = tf.experimental.numpy.take(self.theta,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
-        theta = self.theta
+        theta = tf.experimental.numpy.take(self.theta,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
+        # theta = self.theta
 
         if tf.rank(theta) == 1:
             # return tf.einsum("ijkl,l -> ijk", X, self.theta[1:])+ self.theta[0]*self.traveltimes() + self.fixed_effect
@@ -748,13 +757,13 @@ class GISUELOGIT(tf.keras.Model):
 
         # return tf.clip_by_value(self._alpha, self._epsilon, 1e10)
         # return tf.exp(self._alpha)
-        return tf.clip_by_value(tf.exp(self._alpha), 0, 8)
+        return tf.clip_by_value(tf.exp(self._alpha), 0, 4)
         # return tf.clip_by_value(tf.math.pow(self._alpha,2),0,1e10)
 
     @property
     def beta(self):
         # return tf.clip_by_value(self._beta, self._epsilon, 10)
-        return tf.clip_by_value(tf.exp(self._beta),1,8)
+        return tf.clip_by_value(tf.exp(self._beta),1,4)
         # return tf.clip_by_value(self._beta, 1, 5)
         # return tf.exp(self._beta)
 
@@ -936,7 +945,6 @@ class GISUELOGIT(tf.keras.Model):
             predicted_flow = self.flows()
             predicted_traveltimes = self.traveltimes()
 
-
             # np.nanmean(self.observed_traveltimes)
             # np.nanmean(predicted_traveltimes)
 
@@ -952,6 +960,9 @@ class GISUELOGIT(tf.keras.Model):
                 # #todo: review bpr or tt loss, should they be equivalent?
                 # 'bpr': loss_metric(actual=self.observed_traveltimes, predicted=predicted_traveltimes),
                 'total': tf.constant(0, tf.float64)}
+
+        # loss_metric(actual=self.observed_flows, predicted=predicted_flow)
+        # np.mean((self.observed_flows[~np.isnan(self.observed_flows)]-predicted_flow[~np.isnan(self.observed_flows)])**2)
 
         # tf.squeeze(self.observed_flows)[0]-predicted_flow[0]
 
@@ -1078,6 +1089,9 @@ class GISUELOGIT(tf.keras.Model):
 
         self._period_ids = period_ids
 
+        # This dictionary can revert back the indices of the array estimated by the model to the original period ids
+        self.period_dict = {v: k for k, v in d.items()}
+
         return tf.concat([X[:, :, :-1], tf.expand_dims(period_ids,2)],axis = 2)
 
     def train(self,
@@ -1189,8 +1203,8 @@ class GISUELOGIT(tf.keras.Model):
                 path_flows = self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X_train))))
                 link_flow = self.link_flows(path_flows)
                 relative_x = float(np.nanmean(np.abs(tf.divide(link_flow,self.flows()) - 1)))
-                #theta = tf.experimental.numpy.take(, tf.cast(self.period_ids[:, 0], dtype=tf.int32), 0)
-                theta = self.theta
+                theta = tf.experimental.numpy.take(self.theta, tf.cast(self.period_ids[:, 0], dtype=tf.int32), 0)
+                # theta = self.theta
 
                 for i in range(X_train.shape[0]):
                     sue_objective = sue_objective_function_fisk(
@@ -1482,6 +1496,7 @@ class GISUELOGIT(tf.keras.Model):
 def compute_ratio(parameters: Dict,
                 numerator_feature,
                 denominator_feature):
+
     if denominator_feature in parameters:
 
         if parameters[denominator_feature] != 0:
@@ -1498,6 +1513,17 @@ def compute_rr(parameters: Dict,
                denominator_feature='tt'):
 
     return compute_ratio(parameters, numerator_feature, denominator_feature)
+
+    # if denominator_feature in parameters:
+    #
+    #     if parameters[denominator_feature] != 0:
+    #         return parameters[numerator_feature] / parameters[denominator_feature]
+    #     else:
+    #         return 0
+    #
+    # else:
+    #     return float('nan')
+
 
 def almost_zero(array: np.array, tol = 1e-5):
     array[np.abs(array) < tol] = 0
