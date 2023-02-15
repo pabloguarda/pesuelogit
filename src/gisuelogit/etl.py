@@ -64,6 +64,7 @@ def simulate_suelogit_data(days: List,
                            features_data: pd.DataFrame,
                            network: TransportationNetwork,
                            equilibrator: Equilibrator,
+                           coverage = 1,
                            sd_x: float = 0,
                            sd_t: float = 0,
                            daytoday_variation = False,
@@ -88,23 +89,36 @@ def simulate_suelogit_data(days: List,
                     equilibrator=equilibrator, #{'mu_x': 0, 'sd_x': 0},
                     coverage=1)
 
-        counts_day = linkdata_generator.add_error_counts(
-            original_counts=np.array(list(counts.values()))[:, np.newaxis], sd_x=sd_x)
+            masked_counts, _ = linkdata_generator.mask_counts_by_coverage(
+                original_counts=np.array(list(counts.values()))[:, np.newaxis], coverage=coverage)
 
-        network.load_traffic_counts(counts=dict(zip(counts.keys(),counts_day.flatten())))
+        counts_day_true = np.array(list(counts.values()))[:, np.newaxis]
+        counts_day_noisy = linkdata_generator.add_error_counts(
+            original_counts=masked_counts, sd_x=sd_x)
 
-        df_period['counts'] = network.observed_counts_vector
+        df_period['counts'] = counts_day_noisy
+        df_period['true_counts'] = counts_day_true
 
-        df_period['traveltime'] = [link.true_traveltime for link in network.links]
+        # Generate true travel times from true counts
+        network.load_traffic_counts(counts=dict(zip(counts.keys(),counts_day_true.flatten())))
+        df_period['true_traveltime'] =  [link.true_traveltime for link in network.links]
+
+        # Put nan in links where no traffic count data is available
+        df_period['traveltime'] = [link.true_traveltime if ~np.isnan(count) else float('nan')
+                                        for link,count in zip(network.links, masked_counts)]
 
         df_period['traveltime'] = linkdata_generator.add_error_counts(
-            original_counts=np.array(df_period['traveltime'].values), sd_x=sd_t)
+            original_counts=np.array(df_period['traveltime'])[:, np.newaxis], sd_x=sd_t)
 
         df_list.append(df_period)
 
     df = pd.concat(df_list)
 
+    # df.groupby('link_key').agg('mean')
+
     return df
+
+
 
 
 def get_design_tensor(Z: pd.DataFrame = None,

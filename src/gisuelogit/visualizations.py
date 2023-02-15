@@ -27,7 +27,8 @@ def plot_convergence_estimates(estimates: pd.DataFrame,
 
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize = (5,4))
 
-    g = sns.lineplot(data=estimates, x='epoch', hue='parameter', y='value')
+    if estimates['value'].notnull().sum() > 0:
+        g = sns.lineplot(data=estimates, x='epoch', hue='parameter', y='value', ax = ax)
 
     if true_values is not None:
 
@@ -48,19 +49,52 @@ def plot_convergence_estimates(estimates: pd.DataFrame,
 
     return fig, ax
 
-def plot_rr_by_period(theta_df):
+def plot_rr_by_period_models(models, period_keys, period_feature='hour'):
+    rr_by_hour_models = []
+    for model in models:
 
-    rr_df = theta_df.assign(rr=theta_df.apply(compute_rr, axis=1)).reset_index()[['rr', 'hour']]
-    rr_df['hour'] = pd.Categorical(rr_df['hour'], ordered=True)
-    rr_df = rr_df.sort_values('hour')
+        theta_df = pd.DataFrame({})
 
-    fig, ax = plt.subplots()
+        for i in range(model.theta.shape[0]):
+            theta_dict = dict(zip(model.utility.features, list(model.theta[i].numpy())))
 
-    ax.plot(rr_df['hour'], rr_df['rr'])
-    ax.set_xlabel('epoch')
-    ax.set_ylabel('reliability ratio')
+            label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]][period_feature])
+            label_period_feature_2 = label_period_feature_1 + 1
 
+            label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
 
+            theta_dict[period_feature + '_id'] = label_period_feature
+            theta_dict[period_feature] = label_period_feature_1
+
+            theta_df = theta_df.append(pd.DataFrame(theta_dict, index=[label_period_feature]))
+
+        rr_df = theta_df.assign(rr=theta_df.apply(compute_rr, axis=1)).reset_index()[['rr', period_feature,
+                                                                                      period_feature + '_id']]
+
+        rr_df['model'] = model.key
+
+        rr_by_hour_models.append(rr_df)
+
+    rr_by_hour_models = pd.concat(rr_by_hour_models)
+
+    rr_by_hour_models = rr_by_hour_models.sort_values([period_feature], ascending=True)
+
+    rr_by_hour_models['model'] = pd.Categorical(rr_by_hour_models['model'], ['lue', 'odlue', 'odlulpe', 'tvodlulpe'])
+
+    fig, ax = plt.subplots(figsize = (5,4))
+
+    sns.pointplot(data=rr_by_hour_models, x=period_feature + '_id', y="rr", ax=ax, join=False,
+                  hue='model',markers = ['o', 'v', 's','+'], palette=["black", "black", "black", "black"])
+    plt.xlabel(period_feature)
+    plt.ylabel('reliability ratio', fontsize=12)
+    ax.legend()
+    plt.legend(loc='upper left')
+
+    return rr_by_hour_models
+
+def plot_rr_by_period(model, period_keys, period_feature = 'hour'):
+
+    plot_rr_by_period_models([model], period_keys = period_keys, period_feature=period_feature)
 
 def plot_predictive_performance(train_losses: pd.DataFrame,
                                 val_losses: pd.DataFrame = None,
@@ -249,7 +283,7 @@ def plot_levels_experiment(results: pd.DataFrame,
     # self.save_fig(fig, folder, 'inference_summary')
 
 
-def plot_top_od_flows_periods(model, period_feature, period_keys, top_k = 10, historic_od = None):
+def plot_top_od_flows_periods(model, period_feature, period_keys, historic_od, top_k = 10):
 
     """
     Plot top od pairs according to the variation of the od flows over time periods
@@ -287,16 +321,23 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, top_k = 10, hi
     # plt.show()
 
     # Plot total trips by hour
+    if historic_od is not None:
+        total_trips_by_hour = q_df.sum(axis=0)[1:]
+    else:
+        total_trips_by_hour = q_df.sum(axis=0)
 
-    total_trips_by_hour = q_df.sum(axis=0)[1:].reset_index().rename(columns = {'index': 'hour', 0: 'total_trips'})
+    total_trips_by_hour = total_trips_by_hour.reset_index().rename(columns={'index': 'hour', 0: 'total_trips'})
+
 
     fig, ax = plt.subplots()
 
     if total_trips_by_hour.shape[0] > 1:
-        g = sns.lineplot(data = total_trips_by_hour, x = 'hour', y = 'total_trips', linewidth=0.5, ax = ax, label = 'estimated ODs')
+        g = sns.pointplot(data = total_trips_by_hour, x = 'hour', y = 'total_trips', ax = ax,
+                         label = 'estimated ODs', join = False)
 
     else:
-        g = sns.lineplot(data = total_trips_by_hour, x = 'hour', y = 'total_trips', linewidth=0.5, ax = ax)
+        g = sns.pointplot(data = total_trips_by_hour, x = 'hour', y = 'total_trips', ax = ax,
+                         join = False)
 
         g.axhline(total_trips_by_hour['total_trips'].values[0], label = 'estimated od', linestyle='solid')
 
@@ -312,6 +353,60 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, top_k = 10, hi
     # plt.ylabel('od pair', fontsize=12)
 
     return top_q, total_trips_by_hour
+
+
+def plot_total_trips_models(models, period_feature, period_keys, historic_od: np.array = None):
+    """
+    Plot total trips among hours
+    """
+
+    total_trips_by_hour_models = []
+    for model in models:
+
+        q_df = pd.DataFrame({})
+
+        for i in range(model.q.shape[0]):
+            # q_dict = dict(zip(fresno_network.ods, list(tvodlulpe.q[i].numpy())))
+            q_dict = dict(zip(model.triplist, list(model.q[i].numpy())))
+
+            label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]][period_feature])
+            label_period_feature_2 = label_period_feature_1 + 1
+
+            label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
+
+            q_df = q_df.append(pd.DataFrame(q_dict, index=[label_period_feature]))
+
+        q_df = q_df.transpose()
+
+        total_trips_by_hour = q_df.sum(axis=0).reset_index().rename(columns={'index': period_feature, 0: 'total_trips'})
+
+        total_trips_by_hour['model'] = model.key
+
+        total_trips_by_hour_models.append(total_trips_by_hour)
+
+    total_trips_by_hour_models = pd.concat(total_trips_by_hour_models)
+
+    total_trips_by_hour_models['order'] = total_trips_by_hour_models[period_feature].str.split('-').str[0].astype(int)
+
+    total_trips_by_hour_models  = total_trips_by_hour_models.sort_values('order', ascending=True)
+
+    total_trips_by_hour_models['model'] = pd.Categorical(total_trips_by_hour_models['model'], ['lue', 'odlue', 'odlulpe', 'tvodlulpe'])
+
+    fig, ax = plt.subplots(figsize = (5,4))
+
+    g = sns.pointplot(data=total_trips_by_hour_models, x='hour', y='total_trips', ax=ax, join=False, hue='model',
+                      markers = ['o', 'v', 's','+'], palette=["black", "black", "black", "black"])
+    if historic_od is not None:
+        g.axhline(np.sum(historic_od), linestyle='dashed', color='black', label='historic od')  #
+
+    plt.ylabel('total trips', fontsize=12)
+
+    ax.legend()
+
+    # plt.legend(loc='lower left')
+    plt.legend(loc='upper left')
+
+    return total_trips_by_hour_models
 
 def plot_utility_parameters_periods(model, period_keys, period_feature, include_vot = False):
 
@@ -357,7 +452,15 @@ def plot_utility_parameters_periods(model, period_keys, period_feature, include_
 
     return theta_df
 
+def plot_histograms_flow(true, predicted,observed = None):
 
+    fig, ax = plt.subplots()
+    ax.hist(true, label='true')
+    if observed is not None:
+        ax.hist(observed, label='observed')
+    ax.hist(predicted, label='predicted')
+    plt.legend()
+    plt.show()
 
 def plot_heatmap_demands(Qs: Dict[str, Matrix],
                          subplots_dims: Tuple,

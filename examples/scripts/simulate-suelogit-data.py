@@ -10,7 +10,7 @@ from src.gisuelogit.networks import build_tntp_network, Equilibrator, load_k_sho
 from src.gisuelogit.etl import simulate_features, simulate_suelogit_data, get_design_tensor, get_y_tensor
 
 # Seed for reproducibility
-_SEED = 2022
+_SEED = 2023
 
 np.random.seed(_SEED)
 random.seed(_SEED)
@@ -42,9 +42,9 @@ tntp_network.load_OD(Q=Q)
 #                                                      }))
 
 # Paths
-load_k_shortest_paths(network=tntp_network, k=2, update_incidence_matrices=True)
+load_k_shortest_paths(network=tntp_network, k=3, update_incidence_matrices=True)
 
-n_days = 200
+n_days = 100
 n_links = len(tntp_network.links)
 features_Z = ['tt_sd', 's']
 
@@ -84,12 +84,26 @@ df = simulate_suelogit_data(
     equilibrator=equilibrator,
     sd_x = 0.1,
     sd_t = 0.1,
+    coverage = 0.75,
     network = tntp_network)
 
 output_file = tntp_network.key + '-link-data.csv'
 output_dir = Path('output/network-data/' + tntp_network.key + '/links')
-
 output_dir.mkdir(parents=True, exist_ok=True)
 
-# Write data to csv
 df.to_csv(output_dir / output_file, index=False)
+
+# # Generate a new dataframe but asssuming a 50% coverage
+#
+# df_lower_coverage = simulate_suelogit_data(
+#     days= list(exogenous_features.period.unique()),
+#     features_data = exogenous_features,
+#     equilibrator=equilibrator,
+#     sd_x = 0.1,
+#     sd_t = 0.1,
+#     coverage = 0.5,
+#     network = tntp_network)
+#
+# output_file = tntp_network.key + '-link-data-lower-coverage.csv'
+#
+# df_lower_coverage.to_csv(output_dir / output_file, index=False)

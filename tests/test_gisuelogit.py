@@ -33,9 +33,9 @@ def simulate_data(n_days = 10):
     tf.random.set_seed(_SEED)
 
     # Path management
-    main_dir = str(Path(os.path.abspath('')).parents[1])
+    main_dir = str(Path(os.path.abspath('')).parents[0])
     os.chdir(main_dir)
-    print('main dir:', main_dir)
+    print('\nmain dir:', main_dir)
 
     ## Build network
     network_name = 'SiouxFalls'

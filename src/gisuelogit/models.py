@@ -7,13 +7,14 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 from sklearn.metrics import mean_absolute_error
+from sklearn.preprocessing import normalize
 from tensorflow import keras
 
 from typing import Dict, List, Tuple, Union
 import time
 from .networks import Equilibrator, ColumnGenerator, TransportationNetwork
 from isuelogit.estimation import Parameter
-from .descriptive_statistics import error, mse, rmse, nrmse, btcg_mse, mnrmse,l1norm
+from .descriptive_statistics import error, mse, sse, rmse, nrmse, btcg_mse, mnrmse,l1norm
 
 
 class NGD(tf.keras.optimizers.SGD):
@@ -212,6 +213,7 @@ class  ODParameters(Parameters):
                  initial_values: np.array,
                  historic_values: Dict[str, np.array] = None,
                  true_values: np.array = None,
+                 total_trips: Dict[str, float] = None,
                  time_varying = False,
                  key='od',
                  *args,
@@ -228,22 +230,38 @@ class  ODParameters(Parameters):
         # self.shape = shape
         self.trainable = trainable
         self.historic_values = historic_values
-
+        self.total_trips = total_trips
         self.time_varying = time_varying
 
     @property
-    def historic_values_array(self):
+    def  historic_values_array(self):
         # historic_od = tf.expand_dims(tf.constant(self.network.q.flatten()), axis=0)
         # if len(list(self.historic_values.keys())) > 1:
 
         historic_od = np.empty((self.n_periods, self.shape[0]))
         historic_od[:] = np.nan
 
-        for period, od in self.historic_values.items():
-            historic_od[period - 1, :] = od
+        if self.historic_values is not None:
+            for period, od in self.historic_values.items():
+                historic_od[period, :] = od
 
         return historic_od
         # return self._historic_values
+
+    @property
+    def total_trips_array(self):
+        total_trips = np.empty((self.n_periods))
+        total_trips[:] = float('nan')
+
+        if self.total_trips is not None:
+
+            for period, ntrips in self.total_trips.items():
+                total_trips[period] = ntrips
+
+        return total_trips
+        # return self._historic_values
+  
+    
 
     @property
     def key(self):
@@ -411,6 +429,7 @@ class GISUELOGIT(tf.keras.Model):
         # if self.endogenous_flows:
         self._flows = tf.Variable(
             initial_value=tf.math.sqrt(initial_values['flows']),
+            # initial_value=initial_values['flows'],
             # initial_value=tf.constant(tf.zeros([self.n_timepoints,self.n_links]), dtype=tf.float64),
             trainable= trainables['flows'],
             name='flows',
@@ -491,7 +510,7 @@ class GISUELOGIT(tf.keras.Model):
         flows = tf.math.pow(self._flows, 2)
 
         if self.n_periods>1:
-            flows =  tf.experimental.numpy.take(flows,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
+            flows = tf.experimental.numpy.take(flows,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
 
         return flows
 
@@ -763,7 +782,7 @@ class GISUELOGIT(tf.keras.Model):
     @property
     def beta(self):
         # return tf.clip_by_value(self._beta, self._epsilon, 10)
-        return tf.clip_by_value(tf.exp(self._beta),1,4)
+        return tf.clip_by_value(tf.exp(self._beta),1,4.1)
         # return tf.clip_by_value(self._beta, 1, 5)
         # return tf.exp(self._beta)
 
@@ -896,16 +915,22 @@ class GISUELOGIT(tf.keras.Model):
         #
         # return (1-mask3)*((1-mask1)*tt + mask2*self.tt_ff)
 
-        mask1 = np.where((k >= k_threshold), 1, 0)
-        mask2 = np.where((self.tt_ff == 0), 1, 0)
+        # mask1 = np.where((k >= k_threshold), 1, 0)
+        # mask2 = np.where((self.tt_ff == 0), 1, 0)
+        #
+        # return (1-mask2)*((1-mask1)*tt + self.tt_ff)
 
-        return (1-mask2)*((1-mask1)*tt + self.tt_ff)
+        mask1 = np.where((k >= k_threshold), float('nan'), 1)
+        mask2 = np.where((self.tt_ff == 0), float('nan'), 1)
+
+        return mask2*mask1*tt
 
     def loss_function(self,
                       X,
                       Y,
                       lambdas: Dict[str, float],
-                      loss_metric = None
+                      loss_metric = None,
+                      epoch = None
                       ):
         """
         Return a dictionary with keys defined as the different terms of the loss function
@@ -918,7 +943,8 @@ class GISUELOGIT(tf.keras.Model):
             # loss_metric = mnrmse
             loss_metric = mse
 
-        lambdas_vals = {'tt': 0.0, 'od': 0.0, 'theta': 0.0, 'flow': 0.0, 'eq_flow': 0.0, 'eq_tt': 0.0}
+        lambdas_vals = {'tt': 0.0, 'od': 0.0, 'theta': 0.0, 'flow': 0.0, 'eq_flow': 0.0, 'eq_tt': 0.0
+            , 'bpr': 0, 'ntrips':0, 'prop_od':0}
 
         assert set(lambdas.keys()).issubset(lambdas_vals.keys()), 'Invalid key in loss_weights attribute'
 
@@ -936,56 +962,67 @@ class GISUELOGIT(tf.keras.Model):
 
             self.period_ids = X[:, :, -1]
 
-            # Under recurrent traffic conditions, we assume that the equilibrium flow and travel time is the same regardless the day  Thus, using self.flows() or self.traveltimes() is preferred.
-            # predicted_flow = self.compute_link_flows(X)
-            # predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
-            # output_flow = predicted_flow
 
-            output_flow = self.compute_link_flows(X)
-            predicted_flow = self.flows()
+            # predicted_flow = self.compute_link_flows(X)
+            # output_flow = predicted_flow
+            # predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
+
+            # TODO: allows for computation even when they are not endogenous (create method flow())
+
             predicted_traveltimes = self.traveltimes()
+            output_flow = self.compute_link_flows(X)
+
+            # if epoch is not None and epoch == 0:
+            #     # Benchmark loss for calculation of relative loss
+            #     predicted_flow = self.flows()
+
+            if self.endogenous_flows:
+
+                # Under recurrent traffic conditions, we assume that the equilibrium flow and travel time is the
+                # same regardless the day. Thus, using self.flows() or self.traveltimes() is preferred.
+                predicted_flow = self.flows()
+
+                # Check for potential errors in the calculation of relative gap if observed flows are close to zero
+                # loss['eq_flow'] = tf.reduce_mean(tf.divide(predicted_flow,self.flows())) #-1
+                # np.nanmean(np.abs(1 * (tf.divide(predicted_flow, self.flows()))))
+                # loss['eq_flow'] = l1norm(actual=self.flows(), predicted=predicted_flow)
+                # print(np.mean(np.abs(self.flows()-predicted_flow)))
+                # np.nanmean(np.abs(1 * (tf.divide(self.flows(),predicted_flow) - 1)))
+                # np.nanmean(np.abs(1 * (tf.divide(predicted_flow,self.flows()) - 1)))
+                # np.mean(np.abs(100*(self.flows()/predicted_flow-1)))
+                # np.mean(self.observed_flows)
+            elif not self.endogenous_flows:
+                # loss['eq_flow'] = loss_metric(actual=self.bpr_flows(self.traveltimes()), predicted=output_flow)
+                predicted_flow = output_flow
+                predicted_traveltimes = self.bpr_traveltimes(output_flow)
+
+            # loss['eq_flow'] = loss_metric(actual=predicted_flow, predicted=output_flow)
+            loss['eq_flow'] = loss_metric(actual=self.flows(), predicted=output_flow)
+
+            if self.endogenous_traveltimes:
+                loss['eq_tt'] = loss_metric(actual=self.traveltimes(), predicted=predicted_traveltimes)
+                # print(np.mean(np.abs(self.traveltimes() - predicted_traveltimes)))
+            else:
+                loss['eq_tt'] = loss_metric(actual=self.bpr_traveltimes(self.flows()), predicted=predicted_traveltimes)
 
             # np.nanmean(self.observed_traveltimes)
             # np.nanmean(predicted_traveltimes)
 
-            loss = {
-                # 'od': loss_metric(actual=tf.constant(self.od.historic_values[1].flatten()),
-                #                   predicted=self.q),
-                'od': loss_metric(actual=tf.constant(self.od.historic_values_array),
+            loss.update({
+                'od': loss_metric(actual=self.od.historic_values_array,
                                   predicted=self.q),
+                'ntrips': sse(actual=np.sum(self.q,axis = 1),
+                              predicted=self.od.total_trips_array)/self.od.historic_values_array.shape[1],
+                'prop_od': loss_metric(actual=normalize_od(tf.constant(self.od.historic_values_array)),
+                                  predicted=normalize_od(self.q)),
                 'flow': loss_metric(actual=self.observed_flows, predicted=predicted_flow),
                 # 'flow': loss_metric(actual=self.observed_flows, predicted=output_flow),
                 'tt': loss_metric(actual=self.observed_traveltimes, predicted=predicted_traveltimes),
                 # 'theta': tf.reduce_mean(tf.norm(self.theta, 1)),
                 # #todo: review bpr or tt loss, should they be equivalent?
-                # 'bpr': loss_metric(actual=self.observed_traveltimes, predicted=predicted_traveltimes),
-                'total': tf.constant(0, tf.float64)}
+                'bpr': loss_metric(actual=self.observed_traveltimes, predicted=predicted_traveltimes),
+                'total': tf.constant(0, tf.float64)})
 
-        # loss_metric(actual=self.observed_flows, predicted=predicted_flow)
-        # np.mean((self.observed_flows[~np.isnan(self.observed_flows)]-predicted_flow[~np.isnan(self.observed_flows)])**2)
-
-        # tf.squeeze(self.observed_flows)[0]-predicted_flow[0]
-
-        #TODO: allows for computation even when they are not endogenous (create method flow())
-        if self.endogenous_flows:
-            loss['eq_flow'] = loss_metric(actual=self.flows(), predicted=output_flow)
-
-            # loss['eq_flow'] = tf.reduce_mean(tf.divide(predicted_flow,self.flows())) #-1
-            # np.nanmean(np.abs(1 * (tf.divide(predicted_flow, self.flows()))))
-            # loss['eq_flow'] = l1norm(actual=self.flows(), predicted=predicted_flow)
-            # print(np.mean(np.abs(self.flows()-predicted_flow)))
-            # np.nanmean(np.abs(1 * (tf.divide(self.flows(),predicted_flow) - 1)))
-            # np.nanmean(np.abs(1 * (tf.divide(predicted_flow,self.flows()) - 1)))
-            # np.mean(np.abs(100*(self.flows()/predicted_flow-1)))
-            # np.mean(self.observed_flows)
-        else:
-            loss['eq_flow'] = loss_metric(actual=self.bpr_flows(self.traveltimes()), predicted=output_flow)
-
-        if self.endogenous_traveltimes:
-            loss['eq_tt'] = loss_metric(actual=self.traveltimes(), predicted=predicted_traveltimes)
-            print(np.mean(np.abs(self.traveltimes() - predicted_traveltimes)))
-        else:
-            loss['eq_tt'] = loss_metric(actual=self.bpr_traveltimes(self.flows()), predicted=predicted_traveltimes)
 
         # self.traveltimes()
         # tf.squeeze(predicted_traveltimes)[0]
@@ -1075,6 +1112,7 @@ class GISUELOGIT(tf.keras.Model):
     def original_period_ids(self):
         return self._original_period_ids
 
+
     def set_period_idxs(self, X: tf.Tensor):
 
         self._original_period_ids = X[:, :, -1]
@@ -1082,7 +1120,7 @@ class GISUELOGIT(tf.keras.Model):
         period_ids = X[:, :, -1].numpy()
         period_keys = np.unique(period_ids[:, 0])
 
-        d = dict(zip(list(map(int, np.sort(np.unique(period_keys)))), range(0, len(period_keys))))
+        d = dict(zip(list(map(int, np.sort(period_keys))), range(0, len(period_keys))))
 
         for i,j in d.items():
             period_ids[period_ids == i] = j
@@ -1135,6 +1173,26 @@ class GISUELOGIT(tf.keras.Model):
         X_train = self.set_period_idxs(X = X_train)
         self.period_ids = X_train[:,:,-1]
 
+        # Also update period ids values in historic values of OD and total trips dictionary
+        if self.od.historic_values is not None:
+            new_historic_values = {}
+            for period_id,od in self.od.historic_values.items():
+                for k, v in self.period_dict.items():
+                    if v == period_id:
+                        new_historic_values[k] = od
+
+            self.od.historic_values = new_historic_values
+
+        if self.od.total_trips is not None:
+
+            new_total_trips = {}
+            for period_id, ntrips in self.od.total_trips.items():
+                for k, v in self.period_dict.items():
+                    if v == period_id:
+                        new_total_trips[k] = ntrips
+
+            self.od.total_trips = new_total_trips
+
         self.create_tensor_variables(initial_values = initial_values, trainables=trainables)
 
         # Initialization of endogenous travel times and flows
@@ -1148,6 +1206,7 @@ class GISUELOGIT(tf.keras.Model):
             # self._flows.assign(tf.math.sqrt(tf.reduce_mean(predicted_flow,axis = 0)))
 
             if self.n_periods>1:
+
                 predicted_flow = tf.concat([tf.expand_dims(tf.reduce_mean(link_flows,axis = 0),axis = 0)
                                             for link_flows in self.split_link_flows_by_period(predicted_flow)],axis =0)
 
@@ -1194,6 +1253,8 @@ class GISUELOGIT(tf.keras.Model):
 
         sue_objectives = []
 
+        # Coverage of observed link flows and travel times
+        coverages = np.round((tf.reduce_sum(tf.reduce_sum(tf.cast(~tf.math.is_nan(Y_train),tf.float64), 1),0)/(tf.size(Y_train)/2)).numpy(),2)
 
         while not terminate_algorithm:
 
@@ -1241,10 +1302,12 @@ class GISUELOGIT(tf.keras.Model):
 
                 print(f"\nEpoch: {epoch}/{epochs['learning']}, "
                       f"n_periods: {self.n_periods},  "
-                      f"n_train: {X_train.shape[0]}", end = "")
+                      f"n_timepoints: {X_train.shape[0]}, "
+                      f"coverage t, x: {coverages}"
+                      , end = "")
 
                 if X_val is not None:
-                    print(f", n_test: {X_val.shape[0]}")
+                    print(f", n_timepoints_test: {X_val.shape[0]}")
 
                 print(f"\n{epoch}: train_loss={float(train_losses[-1]['loss_total'].numpy()):0.2g}, "
                     f"val_loss={float(val_losses[-1]['loss_total'].numpy()):0.2g}, "
@@ -1261,10 +1324,12 @@ class GISUELOGIT(tf.keras.Model):
                     f"avg theta fixed effect = {np.mean(self.fixed_effect):0.2g}, "
                     f"avg alpha={np.mean(self.alpha.numpy()):0.2g}, avg beta={np.mean(self.beta.numpy()):0.2g}, "
                     # f"avg abs diff demand ={np.nanmean(np.abs(self.q - self.historic_od(self.q))):0.2g}, ",end = '')
-                    f"loss demand={float(train_losses[-1]['loss_od'].numpy()):0.2g}, "
-                      f"lambda eq={loss_weights['eq_flow']:0.2g}, "
-                      f"relative x={relative_x:0.2g}, "
-                      f"relative gap={relative_gaps[-1]:0.2g}, ", end='')
+                    f"loss prop od={float(train_losses[-1]['loss_od'].numpy()):0.2g}, "
+                    f"loss ntrips={float(train_losses[-1]['loss_ntrips'].numpy()):0.2g}, "
+                    f"total trips={np.array2string(np.round(np.sum(self.q,axis=1)), formatter={'float': lambda x: f'{x:.1e}'})}, "
+                    f"lambda eq={loss_weights['eq_flow']:0.2g}, "
+                    f"relative x={relative_x:0.2g}, "
+                    f"relative gap={relative_gaps[-1]:0.2g}, ", end='')
 
                 if train_losses[-1].get('loss_eq_tt', False):
                     print(f"train tt equilibrium loss={float(train_losses[-1]['loss_eq_tt'].numpy()):0.2g}, ", end = '')
@@ -1322,11 +1387,11 @@ class GISUELOGIT(tf.keras.Model):
                     optimizer.apply_gradients(zip(grads, trainable_variables))
 
                 # Store losses and estimates
-                train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights, loss_metric=mse)
+                train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights, loss_metric=mse, epoch = epoch)
 
 
                 if X_val is not None and Y_val is not None:
-                    val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse)
+                    val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse, epoch = epoch)
 
                 else:
                     val_loss = {k: 0*v for k, v in train_loss.items()}
@@ -1438,11 +1503,9 @@ class GISUELOGIT(tf.keras.Model):
                       'q': False
                       }
 
-        initial_values = {'flows': self.flows(),
-                          # 'theta': {parameter.name[:-2]: parameter
-                          #           for parameter in self._parameters['theta']},
-                          'theta': tf.concat([tf.expand_dims(parameter,1)
-                                    for parameter in self._parameters['theta']],axis = 1),
+        initial_values = {'flows': tf.concat([tf.expand_dims(tf.reduce_mean(link_flows, axis=0), axis=0)
+                                    for link_flows in self.split_link_flows_by_period(self.flows())], axis=0),
+                          'theta': self.theta,
                           'alpha': self.alpha,
                           'beta': self.beta,
                           'q': self.q,
@@ -1464,9 +1527,9 @@ class GISUELOGIT(tf.keras.Model):
 
     def split_link_flows_by_period(self, link_flows):
 
-        link_flows_period = [tf.experimental.numpy.take(link_flows, (self.period_ids[:, 0] == k).numpy().astype(int), 0)
-                             for k in
-                             np.unique(self.period_ids[:, 0])]
+        link_flows_period = [
+            tf.experimental.numpy.take(link_flows, np.arange(0, len(self.period_ids))[(self.period_ids[:, 0] == k).numpy()],0)
+            for k in np.unique(self.period_ids[:, 0])]
 
         return link_flows_period
 
@@ -1524,6 +1587,41 @@ def compute_rr(parameters: Dict,
     # else:
     #     return float('nan')
 
+def compute_insample_outofsample_error(Y, true_counts, true_traveltimes, model):
+    
+    nonmissing_idxs = np.arange(0, len(Y[:, :, 1][0]))[~np.isnan(Y[:, :, 1][0].numpy())]
+    missing_idxs = np.arange(0, len(Y[:, :, 1][0]))[np.isnan(Y[:, :, 1][0].numpy())]
+
+    true_counts_missing = true_counts.copy()
+    true_traveltime_missing = true_traveltimes.copy()
+
+    true_counts_observed = true_counts.copy()
+    true_traveltime_observed = true_traveltimes.copy()
+
+    true_counts_missing[nonmissing_idxs] = float('nan')
+    true_traveltime_missing[nonmissing_idxs] = float('nan')
+
+    true_counts_observed[missing_idxs] = float('nan')
+    true_traveltime_observed[missing_idxs] = float('nan')
+
+    # print(mse(ode.flows(), df.true_counts[0:tntp_network.get_n_links()].values).numpy())
+
+    return pd.Series({'insample_error_flows': mse(model.flows(), true_counts_observed).numpy(),
+               'insample_error_traveltimes': mse(model.traveltimes(), true_traveltime_observed).numpy(),
+               'outofsample_error_flows': mse(model.flows(), true_counts_missing).numpy(),
+               'outofsample_error_traveltimes': mse(model.traveltimes(), true_traveltime_missing).numpy()
+               })
+    
+    
+    
+def normalize_od(X):
+    '''
+    Normalize function from sklearn but that can handle nan. Assume numpy array has 2 dimensions
+
+    Assume input is a tensor
+    '''
+
+    return X/np.sum(X,axis=1,keepdims=True)
 
 def almost_zero(array: np.array, tol = 1e-5):
     array[np.abs(array) < tol] = 0

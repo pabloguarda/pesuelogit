@@ -1,6 +1,23 @@
-### Python template
+# Input
+input/private
+
+#Output
+/output/tables/*
+!output/tables/.gitkeep
+
+/examples/notebooks/backup/
+/examples/notebooks/results-iatbr/
+
+/input/network-data/fresno/links/backup/
+/output/network-data/fresno/links/*
+
+/tests/output/
 
 aws/
+
+### Python template
+
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -146,13 +163,4 @@ cython_debug/
 
 examples/scripts/extra-gps/
 
-# Input
-input/private
 
-#Output
-/output/tables/*
-!output/tables/.gitkeep
-
-/examples/notebooks/backup/
-/input/network-data/fresno/links/backup/
-/output/network-data/fresno/links/*

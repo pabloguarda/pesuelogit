@@ -10,6 +10,10 @@ def l1norm(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float6
         return tf.constant(0, tf.float64)
     return tf.cast(weight*tf.norm(error(actual, predicted), 1),tf.float64)
 
+def sse(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float64:
+    if weight == 0:
+        return tf.constant(0, tf.float64)
+    return tf.cast(weight*tf.reduce_sum(tf.math.pow(error(actual, predicted), 2)),tf.float64)
 
 def mse(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float64:
     if weight == 0:

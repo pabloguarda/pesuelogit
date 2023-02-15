@@ -26,14 +26,14 @@ isl.config.dirs['read_network_data'] = "input/network-data/fresno/"
 
 # Internal modules
 from src.gisuelogit.models import UtilityParameters, BPRParameters, ODParameters, GISUELOGIT, NGD, compute_rr
-from src.gisuelogit.visualizations import plot_predictive_performance, plot_convergence_estimates, plot_utility_parameters_periods, plot_top_od_flows_periods, plot_rr_by_period
+from src.gisuelogit.visualizations import plot_predictive_performance, plot_convergence_estimates, plot_utility_parameters_periods, plot_top_od_flows_periods, plot_rr_by_period, plot_rr_by_period_models, plot_total_trips_models
 from src.gisuelogit.networks import load_k_shortest_paths, read_paths, build_fresno_network, \
     Equilibrator, sparsify_OD, ColumnGenerator, read_OD
 from src.gisuelogit.etl import get_design_tensor, get_y_tensor, data_curation, temporal_split, add_period_id, get_tensors_by_year
 from src.gisuelogit.descriptive_statistics import mse, btcg_mse, nrmse, mnrmse
 
 # Seed for reproducibility
-_SEED = 2022
+_SEED = 2023
 np.random.seed(_SEED)
 random.seed(_SEED)
 tf.random.set_seed(_SEED)
@@ -50,6 +50,8 @@ fresno_network = build_fresno_network()
 ## Read OD matrix
 # TODO: option to specify path to read OD matrix
 read_OD(network=fresno_network, sparse=True)
+
+# np.sum(fresno_network.Q)
 
 # Read paths
 # read_paths(network=fresno_network, update_incidence_matrices=True, filename='paths-fresno.csv')
@@ -70,7 +72,6 @@ df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
 # Select data from Tuesday to Thursday
 df = df[df['date'].dt.dayofweek.between(1, 3)]
 # df = df[df['date'].dt.year == 2019]
-
 # df['date'].dt.dayofweek.unique()
 # len(sorted(df['date']).unique())
 df['period'] = df['date'].astype(str) + '-' + df['hour'].astype(str)
@@ -287,7 +288,8 @@ run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','od
 # run_model = dict.fromkeys( for i in ['lue', 'odlue', 'odlulpe'], True)
 # run_model['equilibrium'] = True
 # run_model['lue'] = True
-# run_model['odlue'] = True
+# run_model['ode'] = True
+run_model['odlue'] = True
 # run_model['odlulpe-1'] = True
 # run_model['odlulpe'] = True
 run_model['tvodlulpe'] = True
@@ -297,10 +299,10 @@ train_results_dfs = {}
 test_results_dfs = {}
 
 # For testing
-_EPOCHS = {'learning': 4, 'equilibrium': 2}
-# _EPOCHS = {'learning': 200, 'equilibrium': 10}
+# _EPOCHS = {'learning': 10, 'equilibrium': 1}
+_EPOCHS = {'learning': 10, 'equilibrium': 3}
 _BATCH_SIZE = 16
-_LR = 5e-1
+_LR = 1e-1
 _RELATIVE_GAP = 1e-5
 _XTICKS_SPACING = 50
 _EPOCHS_PRINT_INTERVAL = 1
@@ -309,7 +311,7 @@ _EPOCHS_PRINT_INTERVAL = 1
 _LOSS_METRIC  = nrmse
 
 # Excluding historic OD gives more freedom for the model to find an equilibria and minimize reconstruction error
-_LOSS_WEIGHTS ={'od': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1}
+_LOSS_WEIGHTS ={'od': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1, 'prop_od': 1, 'ntrips': 1}
 _MOMENTUM_EQUILIBRIUM = 0.99
 #_MOMENTUM_EQUILIBRIUM = 1
 
@@ -358,7 +360,7 @@ if run_model['equilibrium']:
                                  # initial_values=0.6 * tntp_network.q.flatten(),
                                  initial_values=fresno_network.q.flatten(),
                                  true_values=fresno_network.q.flatten(),
-                                 historic_values={1: fresno_network.q.flatten()},
+                                 historic_values={10: fresno_network.q.flatten()},
                                  trainable=False)
 
     equilibrator = Equilibrator(
@@ -455,7 +457,8 @@ if run_model['ode']:
 
     od_parameters = ODParameters(key='od',
                                  initial_values=fresno_network.q.flatten(),
-                                 historic_values={1: fresno_network.q.flatten()},
+                                 historic_values={10: fresno_network.q.flatten()},
+                                 total_trips={0: 1e5},
                                  trainable=True)
 
     equilibrator = Equilibrator(
@@ -532,7 +535,7 @@ if run_model['lue']:
                                  # initial_values=0.6 * tntp_network.q.flatten(),
                                  initial_values=fresno_network.q.flatten(),
                                  true_values=fresno_network.q.flatten(),
-                                 historic_values={1: fresno_network.q.flatten()},
+                                 historic_values={10: fresno_network.q.flatten()},
                                  trainable=False)
 
     equilibrator = Equilibrator(
@@ -627,7 +630,7 @@ if run_model['odlue']:
 
     od_parameters = ODParameters(key='od',
                                  initial_values=fresno_network.q.flatten(),
-                                 historic_values={1: fresno_network.q.flatten()},
+                                 historic_values={10: fresno_network.q.flatten()},
                                  trainable=True)
 
     equilibrator = Equilibrator(
@@ -710,7 +713,7 @@ if run_model['odlulpe-1']:
 
     od_parameters = ODParameters(key='od',
                                  initial_values=fresno_network.q.flatten(),
-                                 historic_values={1: fresno_network.q.flatten()},
+                                 historic_values={10: fresno_network.q.flatten()},
                                  trainable=True)
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
@@ -828,7 +831,7 @@ if run_model['odlulpe']:
 
     od_parameters = ODParameters(key='od',
                                  initial_values=fresno_network.q.flatten(),
-                                 historic_values={1: fresno_network.q.flatten()},
+                                 historic_values={10: fresno_network.q.flatten()},
                                  trainable=True)
 
     utility_parameters = UtilityParameters(features_Y=['tt'],
@@ -938,7 +941,8 @@ if run_model['tvodlulpe']:
     od_parameters = ODParameters(key='od',
                                  initial_values=fresno_network.q.flatten(),
                                  true_values=fresno_network.q.flatten(),
-                                 historic_values={1: fresno_network.q.flatten()},
+                                 historic_values={10: fresno_network.q.flatten()},
+                                 total_trips={0: 1e5, 1: 1e5, 2: 1e5, 9: 1e5, 10: 1e5, 11: 1e5},
                                  time_varying=True,
                                  trainable=True)
 
@@ -983,7 +987,7 @@ if run_model['tvodlulpe']:
     # Compute utility parameters over time (heatmap) and value of travel time reliability (lineplot)
     theta_df = plot_utility_parameters_periods(tvodlulpe, period_keys = period_keys, period_feature='hour')
 
-    plot_rr_by_period(theta_df)
+    plot_rr_by_period(tvodlulpe, period_keys, period_feature='hour')
 
     sns.displot(pd.DataFrame({'fixed_effect': np.array(tvodlulpe.fixed_effect)}),
                 x="fixed_effect", multiple="stack", kind="kde", alpha=0.8)
@@ -1024,7 +1028,7 @@ if run_model['test_tvodlulpe']:
     od_parameters = ODParameters(key='od',
                                  initial_values=fresno_network.q.flatten(),
                                  true_values=fresno_network.q.flatten(),
-                                 historic_values={1: fresno_network.q.flatten()},
+                                 historic_values={10: fresno_network.q.flatten()},
                                  time_varying=True,
                                  trainable=True)
 
@@ -1084,7 +1088,7 @@ if run_model['test_tvodlulpe']:
 
 
 
-## Write csv file with estimation results
+## Write estimation results
 
 train_results_df, val_results_df \
     = map(lambda x: pd.concat([results.assign(model = model)[['model'] + list(results.columns)]
@@ -1093,9 +1097,31 @@ train_results_df, val_results_df \
 train_results_df.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')}_train_results_{'Fresno'}.csv")
 val_results_df.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')}_validation_results_{'Fresno'}.csv")
 
+## Write predictions
+
+predictions = pd.DataFrame({'link_key': list(fresno_network.links_keys) * Y_train.shape[0],
+                            'link_type': [link.link_type for link in fresno_network.links] * Y_train.shape[0],
+                            'observed_traveltime': Y_train[:, :, 0].numpy().flatten(),
+                            'observed_flow': Y_train[:, :, 1].numpy().flatten()})
+
+
+
+predictions['date'] = sorted(df[df.hour == 16].loc[df[df.hour == 16].year == 2019, 'date'])
+
+for model in [lue,odlue,odlulpe]:
+    # model = odlue
+    predicted_flows = model.flows()
+    predicted_traveltimes = model.traveltimes()
+
+    predictions['predicted_traveltime_' + model.key] = np.tile(predicted_traveltimes, (Y_train.shape[0], 1)).flatten()
+    predictions['predicted_flow_' + model.key] = np.tile(predicted_flows, (Y_train.shape[0], 1)).flatten()
+
+predictions.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')}_train_predictions_{'Fresno'}.csv")
+
+
 ## Summary of models parameters
 
-models = [lue,odlue,odlulpe_1,odlulpe, tvodlulpe]
+models = [lue,odlue,odlulpe, tvodlulpe]
 results = pd.DataFrame({'parameter': [], 'model': []})
 
 for model in models:
@@ -1132,7 +1158,7 @@ print(results_losses[['model'] + loss_columns].round(1))
 
 ## Plot of convergence toward true rr across models
 
-models = [lue,odlue,odlulpe_1,odlulpe, tvodlulpe]
+models = [lue,odlue,odlulpe, tvodlulpe]
 
 train_estimates = {}
 train_losses = {}
@@ -1159,6 +1185,11 @@ plt.ylim(ymin=0)
 
 plt.show()
 
+# Plot of relibility ratio by hour for all models
 
+plot_rr_by_period_models(models, period_keys, period_feature='hour')
 
+# Plot of total trips by hour for all models
 
+plot_total_trips_models(models = models, period_feature = 'hour', period_keys = period_keys)
+plt.show()
