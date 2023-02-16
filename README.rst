@@ -1,4 +1,4 @@
-Autoencoded stochastic user equilibrium with logit assignment
+Gradient based Inverse Stochastic User Equilibrium with LOGIT assignment
 ==============================================================================
 
 
