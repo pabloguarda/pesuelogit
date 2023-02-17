@@ -14,7 +14,7 @@ from typing import Dict, List, Tuple, Union
 import time
 from .networks import Equilibrator, ColumnGenerator, TransportationNetwork
 from isuelogit.estimation import Parameter
-from .descriptive_statistics import error, mse, sse, rmse, nrmse, btcg_mse, mnrmse,l1norm
+from .descriptive_statistics import error, mse, sse, rmse, nrmse, btcg_mse, mnrmse,l1norm, mape
 
 
 class NGD(tf.keras.optimizers.SGD):
@@ -925,6 +925,22 @@ class GISUELOGIT(tf.keras.Model):
 
         return mask2*mask1*tt
 
+    def predicted_flow(self):
+
+        if self.endogenous_flows:
+            return self.flows()
+
+        elif not self.endogenous_flows:
+            return tf.reduce_mean(self.compute_link_flows(self.X), axis=0, keepdims=True)
+
+    def predicted_traveltime(self):
+
+        if self.endogenous_flows:
+            return self.traveltimes()
+
+        elif not self.endogenous_flows:
+            return self.bpr_traveltimes(self.predicted_flow())
+
     def loss_function(self,
                       X,
                       Y,
@@ -960,7 +976,8 @@ class GISUELOGIT(tf.keras.Model):
             self.observed_traveltimes = self.mask_observed_traveltimes(tt = self.observed_traveltimes,
                                                                        k = np.array([link.bpr.k for link in self.network.links]))
 
-            self.period_ids = X[:, :, -1]
+            self.X = X
+            self.period_ids = self.X[:, :, -1]
 
 
             # predicted_flow = self.compute_link_flows(X)
@@ -969,32 +986,15 @@ class GISUELOGIT(tf.keras.Model):
 
             # TODO: allows for computation even when they are not endogenous (create method flow())
 
-            predicted_traveltimes = self.traveltimes()
             output_flow = self.compute_link_flows(X)
 
             # if epoch is not None and epoch == 0:
             #     # Benchmark loss for calculation of relative loss
             #     predicted_flow = self.flows()
 
-            if self.endogenous_flows:
-
-                # Under recurrent traffic conditions, we assume that the equilibrium flow and travel time is the
-                # same regardless the day. Thus, using self.flows() or self.traveltimes() is preferred.
-                predicted_flow = self.flows()
-
-                # Check for potential errors in the calculation of relative gap if observed flows are close to zero
-                # loss['eq_flow'] = tf.reduce_mean(tf.divide(predicted_flow,self.flows())) #-1
-                # np.nanmean(np.abs(1 * (tf.divide(predicted_flow, self.flows()))))
-                # loss['eq_flow'] = l1norm(actual=self.flows(), predicted=predicted_flow)
-                # print(np.mean(np.abs(self.flows()-predicted_flow)))
-                # np.nanmean(np.abs(1 * (tf.divide(self.flows(),predicted_flow) - 1)))
-                # np.nanmean(np.abs(1 * (tf.divide(predicted_flow,self.flows()) - 1)))
-                # np.mean(np.abs(100*(self.flows()/predicted_flow-1)))
-                # np.mean(self.observed_flows)
-            elif not self.endogenous_flows:
                 # loss['eq_flow'] = loss_metric(actual=self.bpr_flows(self.traveltimes()), predicted=output_flow)
-                predicted_flow = output_flow
-                predicted_traveltimes = self.bpr_traveltimes(output_flow)
+            predicted_flow = self.predicted_flow()
+            predicted_traveltimes = self.predicted_traveltime()
 
             # loss['eq_flow'] = loss_metric(actual=predicted_flow, predicted=output_flow)
             loss['eq_flow'] = loss_metric(actual=self.flows(), predicted=output_flow)
@@ -1503,8 +1503,12 @@ class GISUELOGIT(tf.keras.Model):
                       'q': False
                       }
 
-        initial_values = {'flows': tf.concat([tf.expand_dims(tf.reduce_mean(link_flows, axis=0), axis=0)
-                                    for link_flows in self.split_link_flows_by_period(self.flows())], axis=0),
+        link_flows = self.flows()
+        if self.n_periods > 1:
+            link_flows = tf.concat([tf.expand_dims(tf.reduce_mean(link_flows, axis=0), axis=0)
+                                    for link_flows in self.split_link_flows_by_period(self.flows())], axis=0)
+
+        initial_values = {'flows': link_flows,
                           'theta': self.theta,
                           'alpha': self.alpha,
                           'beta': self.beta,
@@ -1587,7 +1591,7 @@ def compute_rr(parameters: Dict,
     # else:
     #     return float('nan')
 
-def compute_insample_outofsample_error(Y, true_counts, true_traveltimes, model):
+def compute_insample_outofsample_error(Y, true_counts, true_traveltimes, model, metric = mape):
     
     nonmissing_idxs = np.arange(0, len(Y[:, :, 1][0]))[~np.isnan(Y[:, :, 1][0].numpy())]
     missing_idxs = np.arange(0, len(Y[:, :, 1][0]))[np.isnan(Y[:, :, 1][0].numpy())]
@@ -1606,10 +1610,10 @@ def compute_insample_outofsample_error(Y, true_counts, true_traveltimes, model):
 
     # print(mse(ode.flows(), df.true_counts[0:tntp_network.get_n_links()].values).numpy())
 
-    return pd.Series({'insample_error_flows': mse(model.flows(), true_counts_observed).numpy(),
-               'insample_error_traveltimes': mse(model.traveltimes(), true_traveltime_observed).numpy(),
-               'outofsample_error_flows': mse(model.flows(), true_counts_missing).numpy(),
-               'outofsample_error_traveltimes': mse(model.traveltimes(), true_traveltime_missing).numpy()
+    return pd.Series({'insample_error_flow': metric(true_counts_observed[np.newaxis,:],model.predicted_flow()).numpy(),
+               'insample_error_traveltime': metric(true_traveltime_observed[np.newaxis,:],model.predicted_traveltime()).numpy(),
+               'outofsample_error_flow': metric(true_counts_missing[np.newaxis,:],model.predicted_flow()).numpy(),
+               'outofsample_error_traveltime': metric(true_traveltime_missing[np.newaxis,:],model.predicted_traveltime()).numpy()
                })
     
     

@@ -21,10 +21,10 @@ from src.gisuelogit.models import UtilityParameters, GISUELOGIT, BPRParameters, 
     compute_insample_outofsample_error
 from src.gisuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator, ColumnGenerator
 from src.gisuelogit.etl import get_design_tensor, get_y_tensor, add_period_id
-from src.gisuelogit.descriptive_statistics import mse, btcg_mse, mnrmse
+from src.gisuelogit.descriptive_statistics import mse, btcg_mse, mnrmse, mape
 
 # Seed for reproducibility
-_SEED = 2022
+_SEED = 2023
 np.random.seed(_SEED)
 random.seed(_SEED)
 tf.random.set_seed(_SEED)
@@ -45,7 +45,7 @@ tntp_network.load_OD(Q=Q)
 Q_historic = isl.factory.random_disturbance_Q(tntp_network.Q.copy(), sd=np.mean(tntp_network.Q) * 0.1)
 #
 # Paths
-load_k_shortest_paths(network=tntp_network, k=2, update_incidence_matrices=True)
+load_k_shortest_paths(network=tntp_network, k=3, update_incidence_matrices=True)
 # features_Z = []
 
 # REad synthethic data which was generated under the assumption of path sets of size 2.
@@ -95,10 +95,10 @@ X = get_design_tensor(Z=df[features_Z + ['period_id']], n_links=n_links, n_timep
 
 X_train, X_test, Y_train, Y_test = X, None, Y, None
 
-# _EPOCHS = {'learning': 400, 'equilibrium': 0}
+# _EPOCHS = {'learning': 400, 'equilibrium': 10}
 # _EPOCHS = {'learning': 100, 'equilibrium': 0}
-_EPOCHS = {'learning': 30, 'equilibrium': 5}
-_LR = 1e-1
+_EPOCHS = {'learning': 5, 'equilibrium': 5}
+_LR = 1e-2
 _RELATIVE_GAP = 1e-8
 _XTICKS_SPACING = 50
 # To reduce variability in estimates of experiments, it is better to not use batches
@@ -116,7 +116,7 @@ _LOSS_WEIGHTS ={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1,
 
 # Models
 list_models = ['equilibrium', 'lue', 'ode', 'ode-nosuelogit', 'lpe',
-               'odlue', 'odlulpe', 'odlulpe-no-equilibrium', 'tvodlulpe']
+               'odlue', 'odlulpe', 'odlulpee', 'tvodlulpe']
 
 # run_model = dict.fromkeys(list_models,True)
 run_model = dict.fromkeys(list_models, False)
@@ -127,9 +127,9 @@ run_model = dict.fromkeys(list_models, False)
 # run_model['ode-nosuelogit'] = True
 # run_model['lpe'] = True
 # run_model['odlue'] = True
-# run_model['odlulpe'] = True
-# run_model['odlulpe-no-equilibrium'] = True
-run_model['tvodlulpe'] = True
+run_model['odlulpe'] = True
+run_model['odlulpee'] = True
+# run_model['tvodlulpe'] = True
 
 train_results_dfs = {}
 val_results_dfs = {}
@@ -788,15 +788,25 @@ if run_model['odlulpe']:
 
     plt.show()
 
-    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlulpe.theta.numpy())))}, "
+    # Because the link capacities are different, the points do not perfectly align a bpr function. I may plot for
+    # each group of link capacity
+    sns.scatterplot(data = pd.DataFrame({'link flow': odlulpe.predicted_flow().numpy().flatten(),
+                                         'travel time': odlulpe.predicted_traveltime().numpy().flatten(),
+                                         'capacity': [link.bpr.k for link in odlulpe.network.links]}),
+                                        x = 'link flow', y = 'travel time')
+
+    theta = dict(zip(utility_parameters.true_values.keys(), list(np.round(odlulpe.theta.numpy().flatten(),2))))
+    print(f"theta = {theta}, "
           f"rr = {train_results_estimates.eval('tt_sd/tt').values[-1]:0.2f}")
     print(f"alpha = {np.mean(odlulpe.alpha): 0.2f}, beta  = {np.mean(odlulpe.beta): 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(odlulpe.q - tntp_network.q.flatten())): 0.2f}")
+    print(f"MAPE link flows={mape(actual=odlulpe.observed_flows, predicted = odlulpe.predicted_flow()):0.1f}, "
+          f"MAPE travel times={mape(actual=odlulpe.observed_traveltimes, predicted = odlulpe.predicted_traveltime()):0.1f}")
 
-if run_model['odlulpe-no-equilibrium']:
+if run_model['odlulpee']:
     # _RELATIVE_GAP = 1e-10
 
-    print('\nODLULPE with no equilibrium component')
+    print('\nODLULPEE: ODLULPE with no equilibrium component')
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
 
@@ -846,8 +856,8 @@ if run_model['odlulpe-no-equilibrium']:
         accuracy=1e-4,
     )
 
-    odlulpe_no_equilibrium = GISUELOGIT(
-        key='odlulpe-no-equilibrium',
+    odlulpee = GISUELOGIT(
+        key='odlulpee',
         network=tntp_network,
         dtype=tf.float64,
         endogenous_flows=False,
@@ -857,12 +867,12 @@ if run_model['odlulpe-no-equilibrium']:
         od=od_parameters,
     )
 
-    train_results_dfs['odlulpe-no-equilibrium'], val_results_dfs['odlulpe-no-equilibrium'] \
-        = odlulpe_no_equilibrium.train(
+    train_results_dfs['odlulpee'], val_results_dfs['odlulpee'] \
+        = odlulpee.train(
         X_train, Y_train, X_test, Y_test,
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
-        loss_weights= dict(_LOSS_WEIGHTS, eq_flow = 0),
+        loss_weights= dict(_LOSS_WEIGHTS, eq_flow = 0, bpr = 1),
         loss_metric=_LOSS_METRIC,
         momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
         threshold_relative_gap=_RELATIVE_GAP,
@@ -871,47 +881,61 @@ if run_model['odlulpe-no-equilibrium']:
     )
 
     train_results_estimates, train_results_losses \
-        = odlulpe_no_equilibrium.split_results(results=train_results_dfs['odlulpe-no-equilibrium'])
+        = odlulpee.split_results(results=train_results_dfs['odlulpee'])
     val_results_estimates, val_results_losses \
-        = odlulpe_no_equilibrium.split_results(results=val_results_dfs['odlulpe-no-equilibrium'])
+        = odlulpee.split_results(results=val_results_dfs['odlulpee'])
 
     print(compute_insample_outofsample_error(Y=Y_train,
                                              true_counts=df.true_counts.values[0:tntp_network.get_n_links()],
                                              true_traveltimes=df.true_traveltime.values[0:tntp_network.get_n_links()],
-                                             model=odlulpe_no_equilibrium))
+                                             model=odlulpee))
+
+    # plt.scatter(x = odlulpee.flows().numpy().flatten(), y = odlulpee.traveltimes().numpy().flatten())
+    # plt.show()
+
+    sns.scatterplot(data = pd.DataFrame({'link flow': odlulpee.predicted_flow().numpy().flatten(),
+                                         'travel time': odlulpee.predicted_traveltime().numpy().flatten(),
+                                         'capacity': [link.bpr.k for link in odlulpee.network.links]}),
+                                        x = 'link flow', y = 'travel time')
+
+
 
     plot_predictive_performance(train_losses= train_results_losses,
-                                val_losses =val_results_dfs['odlulpe-no-equilibrium'],
+                                val_losses =val_results_dfs['odlulpee'],
                                 xticks_spacing = 250)
 
     plot_convergence_estimates(estimates=
                                train_results_estimates.assign(
                                    rr = train_results_estimates['tt_sd']/train_results_estimates['tt'])[['epoch','rr']],
-                               true_values={'rr':odlulpe_no_equilibrium.utility.true_values['tt_sd']
-                                                 /odlulpe_no_equilibrium.utility.true_values['tt']})
+                               true_values={'rr':odlulpee.utility.true_values['tt_sd']
+                                                 /odlulpee.utility.true_values['tt']})
 
     plot_convergence_estimates(estimates=train_results_estimates[['epoch','alpha','beta']],
-                               true_values=odlulpe_no_equilibrium.bpr.true_values)
+                               true_values=odlulpee.bpr.true_values)
 
-    # sns.displot(pd.melt(pd.DataFrame({'alpha':odlulpe_no_equilibrium.alpha, 'beta': odlulpe_no_equilibrium.beta}), var_name = 'parameters'),
+    # sns.displot(pd.melt(pd.DataFrame({'alpha':odlulpee.alpha, 'beta': odlulpee.beta}), var_name = 'parameters'),
     #             x="value", hue="parameters", multiple="stack", kind="kde", alpha = 0.8)
     #
-    # sns.displot(pd.DataFrame({'fixed_effect':np.array(odlulpe_no_equilibrium.fixed_effect)}),
+    # sns.displot(pd.DataFrame({'fixed_effect':np.array(odlulpee.fixed_effect)}),
     #             x="fixed_effect", multiple="stack", kind="kde", alpha = 0.8)
 
     Qs = {'true': tntp_network.OD.Q_true, 'historic': Q_historic,
-          'estimated': tf.sparse.to_dense(odlulpe_no_equilibrium.Q).numpy()}
+          'estimated': tf.sparse.to_dense(odlulpee.Q).numpy()}
 
     plot_heatmap_demands(Qs=Qs, vmin=np.min(Qs['true']), vmax=np.max(Qs['true']), subplots_dims=(1, 3), figsize=(12, 4))
 
     plt.show()
 
-    print(f"theta = {dict(zip(utility_parameters.true_values.keys(), list(odlulpe_no_equilibrium.theta.numpy())))}, "
+    theta = dict(zip(utility_parameters.true_values.keys(), list(np.round(odlulpee.theta.numpy().flatten(),2))))
+    print(f"theta = {theta}, "
           f"rr = {train_results_estimates.eval('tt_sd/tt').values[-1]:0.2f}")
-    print(f"alpha = {np.mean(odlulpe_no_equilibrium.alpha): 0.2f}, "
-          f"beta  = {np.mean(odlulpe_no_equilibrium.beta): 0.2f}")
+    print(f"alpha = {np.mean(odlulpee.alpha): 0.2f}, "
+          f"beta  = {np.mean(odlulpee.beta): 0.2f}")
     print(f"Avg abs diff between observed and estimated OD: "
-          f"{np.mean(np.abs(odlulpe_no_equilibrium.q - tntp_network.q.flatten())): 0.2f}")
+          f"{np.mean(np.abs(odlulpee.q - tntp_network.q.flatten())): 0.2f}")
+
+    print(f"MAPE link flows={mape(actual=odlulpee.observed_flows, predicted = odlulpee.flows()):0.1f},"
+          f"MAPE travel times={mape(actual=odlulpee.observed_traveltimes, predicted = odlulpee.traveltimes()):0.1f}")
 
 if run_model['tvodlulpe']:
     print('\ntvodlulpe: Time specific utility and OD, link performance parameters, no historic OD')
@@ -1010,9 +1034,9 @@ predictions = pd.DataFrame({'link_key': list(tntp_network.links_keys) * Y_train.
 
 predictions['period'] = df.period
 
-for model in [lue,odlue,odlulpe,odlulpe_no_equilibrium]:
+for model in [lue,odlue,odlulpe,odlulpee]:
 
-    model = odlulpe_no_equilibrium
+    model = odlulpee
 
     predicted_flows = model.flows()
     predicted_traveltimes = model.traveltimes()

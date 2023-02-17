@@ -1,8 +1,12 @@
 import tensorflow as tf
-
-def error(actual: tf.constant, predicted: tf.constant):
+import numpy as np
+def error(actual: tf.constant, predicted: tf.constant, mask = None):
     # return tf.boolean_mask(predicted - actual, tf.math.is_finite(predicted - actual))
-    return tf.boolean_mask(predicted - actual, tf.math.is_finite(predicted - actual))
+
+    if mask is None:
+        mask = tf.math.is_finite(predicted - actual)
+
+    return tf.boolean_mask(predicted - actual, mask)
 
 
 def l1norm(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float64:
@@ -20,7 +24,17 @@ def mse(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float64:
         return tf.constant(0, tf.float64)
     return tf.cast(weight*tf.reduce_mean(tf.math.pow(error(actual, predicted), 2)),tf.float64)
 
-# (actual-predicted).numpy().flatten().shape
+def mape(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float64:
+    """
+    Skip cases where the observed values are equal to zero or nan
+    """
+    if weight == 0:
+        return tf.constant(0, tf.float64)
+
+    mask = tf.cast(tf.math.is_finite(actual), tf.float32) * tf.cast(actual > 0, tf.float32)
+
+    return 100*weight*tf.reduce_mean(tf.abs(error(actual, predicted, mask = mask))/tf.boolean_mask(actual, mask))
+
 
 def rmse(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float64:
     if weight == 0:
