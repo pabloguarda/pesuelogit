@@ -66,7 +66,7 @@ def plot_rr_by_period_models(models, period_keys, period_feature='hour'):
             theta_dict[period_feature + '_id'] = label_period_feature
             theta_dict[period_feature] = label_period_feature_1
 
-            theta_df = theta_df.append(pd.DataFrame(theta_dict, index=[label_period_feature]))
+            theta_df = pd.concat([theta_df, pd.DataFrame(theta_dict, index=[label_period_feature])])
 
         rr_df = theta_df.assign(rr=theta_df.apply(compute_rr, axis=1)).reset_index()[['rr', period_feature,
                                                                                       period_feature + '_id']]
@@ -286,7 +286,7 @@ def plot_levels_experiment(results: pd.DataFrame,
 def plot_top_od_flows_periods(model, period_feature, period_keys, historic_od, top_k = 10):
 
     """
-    Plot top od pairs according to the variation of the od flows over time periods
+    Plot top od pairs according to the largest number of trips reported in historic OD matrix
     """
 
     q_df = pd.DataFrame({})
@@ -299,7 +299,7 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, historic_od, t
 
         label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
 
-        q_df = q_df.append(pd.DataFrame(q_dict, index=[label_period_feature]))
+        q_df = pd.concat([q_df,pd.DataFrame(q_dict, index=[label_period_feature])])
 
     q_df = q_df.transpose()
 
@@ -309,7 +309,7 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, historic_od, t
 
     # top_q = q_df.loc[q_df.var(axis = 1).sort_values(ascending=False)[0:top_k].index].sort_index()
 
-    top_q = q_df.loc[q_df['historic_od'].sort_values(ascending=False)[0:top_k].index].sort_index()
+    top_q = q_df.loc[q_df['historic_od'].sort_values(ascending=False)[0:top_k].index] #.sort_index()
 
     fig, ax = plt.subplots()
 
@@ -374,7 +374,7 @@ def plot_total_trips_models(models, period_feature, period_keys, historic_od: np
 
             label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
 
-            q_df = q_df.append(pd.DataFrame(q_dict, index=[label_period_feature]))
+            q_df = pd.concat([q_df,pd.DataFrame(q_dict, index=[label_period_feature])])
 
         q_df = q_df.transpose()
 
@@ -425,7 +425,7 @@ def plot_utility_parameters_periods(model, period_keys, period_feature, include_
 
         theta_dict['hour'] = label_period_feature_1
 
-        theta_df = theta_df.append(pd.DataFrame(theta_dict, index=[label_period_feature]))
+        theta_df = pd.concat([theta_df,pd.DataFrame(theta_dict, index=[label_period_feature])])
 
 
     if include_vot:
