@@ -771,23 +771,16 @@ class GISUELOGIT(tf.keras.Model):
 
     @property
     def alpha(self):
-
         # Without the exponential trick, the estimation of alpha is more unstable.
+        return tf.clip_by_value(tf.exp(self._alpha), 0, 8)
+        # return tf.clip_by_value(tf.exp(self._alpha), 0, 4)
 
-        # return tf.clip_by_value(self._alpha, self._epsilon, 1e10)
-        # return tf.exp(self._alpha)
-        return tf.clip_by_value(tf.exp(self._alpha), 0, 4)
-        # return tf.clip_by_value(tf.math.pow(self._alpha,2),0,1e10)
 
     @property
     def beta(self):
-        # return tf.clip_by_value(self._beta, self._epsilon, 10)
-        return tf.clip_by_value(tf.exp(self._beta),1,4.1)
-        # return tf.clip_by_value(self._beta, 1, 5)
-        # return tf.exp(self._beta)
-
-        # return tf.math.pow(self._beta, 2)
-        # return tf.clip_by_value(tf.math.pow(self._beta, 2),0,10)
+        return tf.clip_by_value(tf.exp(self._beta), 0, 8)
+        # return tf.clip_by_value(tf.exp(self._beta),1,4.1)
+        # return tf.clip_by_value(tf.exp(self._beta), self._epsilon, 10)
 
     @property
     def tt_ff(self):
