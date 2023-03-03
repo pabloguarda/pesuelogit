@@ -20,15 +20,9 @@ If using a Macbook with Apple Silicon chip, we recommend using Conda for python 
 1. Clone this repository.
 
 2. Download and install Anaconda for 64-Bit (M1): https://docs.anaconda.com/anaconda/install/index.html
-3. Create virtual environment: ``conda create -n gisuelogit``
-4. Activate environment: ``conda activate gisuelogit``
-5. Install dependencies: conda env update -f gisuelogit.yml
-
-Alternatively,
-
-6. Install the TensorFlow dependencies: ``conda install -c apple tensorflow-deps``
-7. Install base TensorFlow: ``pip install tensorflow-macos``
-
+3. Create virtual environment: ``conda create -n pesuelogit``
+4. Activate environment: ``conda activate pesuelogit``
+5. Install dependencies: conda env update -f pesuelogit.yml
 
 This repository is currently compatible with Python 3.9.x
 

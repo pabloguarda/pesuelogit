@@ -298,7 +298,7 @@ class  ODParameters(Parameters):
         return np.repeat(self.initial_value[np.newaxis, :], self.n_periods, axis=0)
 
 
-class GISUELOGIT(tf.keras.Model):
+class PESUELOGIT(tf.keras.Model):
     """ Gradient based inverse stochastic user equilibrium with logit assignment"""
 
     def __init__(self,
@@ -1475,7 +1475,7 @@ class GISUELOGIT(tf.keras.Model):
 
     def train_equilibrium(self, **kwargs):
 
-        suelogit = GISUELOGIT(
+        suelogit = PESUELOGIT(
             key='suelogit',
             # endogenous_flows=True,
             network=self.network,
@@ -1686,7 +1686,7 @@ def sue_objective_function_fisk(f,
     return float(objective_function)
 
 
-class AETSUELOGIT(GISUELOGIT):
+class AETSUELOGIT(PESUELOGIT):
     """ Auto-encoded travel time based stochastic user equilibrium with logit assignment"""
 
     def __init__(self,
@@ -1714,7 +1714,7 @@ class AETSUELOGIT(GISUELOGIT):
                 name='traveltimes',
                 dtype=self.dtype)
 
-        GISUELOGIT.create_tensor_variables(self, keys=keys)
+        PESUELOGIT.create_tensor_variables(self, keys=keys)
 
     def traveltimes(self, link_flow = None):
         """
@@ -1747,7 +1747,7 @@ class AETSUELOGIT(GISUELOGIT):
         return self.bpr_traveltimes(self.compute_link_flows(X))
 
 
-class ODLUE(GISUELOGIT):
+class ODLUE(PESUELOGIT):
 
     # ODLUE is an extension of the logit utility estimation (LUE) problem solved in the isuelogit package.  It is
     # fed with link features of multiple time days and it allows for the estimation of the OD matrix and of the
@@ -1768,7 +1768,7 @@ class ODLUE(GISUELOGIT):
             keys = dict.fromkeys(['q', 'theta', 'psc_factor', 'fixed_effect'], True)
             # keys = dict.fromkeys(['alpha', 'beta'], False)
 
-        GISUELOGIT.create_tensor_variables(self, keys=keys)
+        PESUELOGIT.create_tensor_variables(self, keys=keys)
 
     def call(self, X):
         """

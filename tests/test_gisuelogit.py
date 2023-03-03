@@ -1,4 +1,4 @@
-from gisuelogit import __version__
+from pesuelogit import __version__
 
 import os
 from pathlib import Path
@@ -13,11 +13,11 @@ import tensorflow as tf
 import isuelogit as isl
 
 # Internal modules
-from src.gisuelogit.visualizations import plot_predictive_performance, plot_convergence_estimates
-from src.gisuelogit.models import UtilityParameters, GISUELOGIT, BPRParameters, ODParameters, compute_rr
-from src.gisuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator
-from src.gisuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data, add_period_id, simulate_features
-from src.gisuelogit.descriptive_statistics import mse
+from src.pesuelogit.visualizations import plot_predictive_performance, plot_convergence_estimates
+from src.pesuelogit.models import UtilityParameters, GISUELOGIT, BPRParameters, ODParameters, compute_rr
+from src.pesuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator
+from src.pesuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data, add_period_id, simulate_features
+from src.pesuelogit.descriptive_statistics import mse
 
 # Seed for reproducibility
 _SEED = 2022

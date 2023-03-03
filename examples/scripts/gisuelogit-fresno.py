@@ -25,12 +25,12 @@ print('main dir:', main_dir)
 isl.config.dirs['read_network_data'] = "input/network-data/fresno/"
 
 # Internal modules
-from src.gisuelogit.models import UtilityParameters, BPRParameters, ODParameters, GISUELOGIT, NGD, compute_rr
-from src.gisuelogit.visualizations import plot_predictive_performance, plot_convergence_estimates, plot_utility_parameters_periods, plot_top_od_flows_periods, plot_rr_by_period, plot_rr_by_period_models, plot_total_trips_models
-from src.gisuelogit.networks import load_k_shortest_paths, read_paths, build_fresno_network, \
+from src.pesuelogit.models import UtilityParameters, BPRParameters, ODParameters, PESUELOGIT, NGD, compute_rr
+from src.pesuelogit.visualizations import plot_predictive_performance, plot_convergence_estimates, plot_utility_parameters_periods, plot_top_od_flows_periods, plot_rr_by_period, plot_rr_by_period_models, plot_total_trips_models
+from src.pesuelogit.networks import load_k_shortest_paths, read_paths, build_fresno_network, \
     Equilibrator, sparsify_OD, ColumnGenerator, read_OD
-from src.gisuelogit.etl import get_design_tensor, get_y_tensor, data_curation, temporal_split, add_period_id, get_tensors_by_year
-from src.gisuelogit.descriptive_statistics import mse, btcg_mse, nrmse, mnrmse
+from src.pesuelogit.etl import get_design_tensor, get_y_tensor, data_curation, temporal_split, add_period_id, get_tensors_by_year
+from src.pesuelogit.descriptive_statistics import mse, btcg_mse, nrmse, mnrmse
 
 # Seed for reproducibility
 _SEED = 2023
@@ -289,7 +289,7 @@ run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','od
 # run_model['equilibrium'] = True
 # run_model['lue'] = True
 # run_model['ode'] = True
-run_model['odlue'] = True
+# run_model['odlue'] = True
 # run_model['odlulpe-1'] = True
 # run_model['odlulpe'] = True
 run_model['tvodlulpe'] = True
@@ -383,7 +383,7 @@ if run_model['equilibrium']:
 
     print("\nSUELOGIT equilibrium")
 
-    suelogit = GISUELOGIT(
+    suelogit = PESUELOGIT(
         key='suelogit',
         # endogenous_flows=True,
         network=fresno_network,
@@ -471,7 +471,7 @@ if run_model['ode']:
         accuracy=1e-4,
     )
 
-    ode = GISUELOGIT(
+    ode = PESUELOGIT(
         key='ode',
         network=fresno_network,
         dtype=tf.float64,
@@ -505,7 +505,7 @@ if run_model['ode']:
     print(f"Avg observed OD: {np.mean(np.abs(fresno_network.q.flatten())): 0.2f}")
 
 if run_model['lue']:
-    print('\nLUE: Benchmark of gisuelogit and isuelogit (utility only)')
+    print('\nLUE: Benchmark of pesuelogit and isuelogit (utility only)')
 
     # _RELATIVE_GAP = 1e-4
 
@@ -556,7 +556,7 @@ if run_model['lue']:
                                        # ods_sampling='demand',
                                        )
 
-    lue = GISUELOGIT(
+    lue = PESUELOGIT(
         key='lue',
         network=fresno_network,
         # endogenous_flows=False,
@@ -643,7 +643,7 @@ if run_model['odlue']:
         accuracy=1e-4,
     )
 
-    odlue = GISUELOGIT(
+    odlue = PESUELOGIT(
         key='odlue',
         network=fresno_network,
         dtype=tf.float64,
@@ -748,7 +748,7 @@ if run_model['odlulpe-1']:
                                        # ods_sampling='demand',
                                        )
 
-    odlulpe_1 = GISUELOGIT(
+    odlulpe_1 = PESUELOGIT(
         key='odlulpe-1',
         network=fresno_network,
         dtype=tf.float64,
@@ -865,7 +865,7 @@ if run_model['odlulpe']:
                                        # ods_sampling='demand',
                                        )
 
-    odlulpe = GISUELOGIT(
+    odlulpe = PESUELOGIT(
         key='odlulpe',
         network=fresno_network,
         dtype=tf.float64,
@@ -946,7 +946,7 @@ if run_model['tvodlulpe']:
                                  time_varying=True,
                                  trainable=True)
 
-    tvodlulpe = GISUELOGIT(
+    tvodlulpe = PESUELOGIT(
         key='tvodlulpe',
         network=fresno_network,
         dtype=tf.float64,
@@ -1032,7 +1032,7 @@ if run_model['test_tvodlulpe']:
                                  time_varying=True,
                                  trainable=True)
 
-    test_tvodlulpe = GISUELOGIT(
+    test_tvodlulpe = PESUELOGIT(
         key='test_tvodlulpe',
         network=fresno_network,
         dtype=tf.float64,

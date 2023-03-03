@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "gisuelogit"
+name = "pesuelogit"
 version = "0.1.0"
 description = ""
 authors = ["Pablo Guarda <pablo.guarda.r@gmail.com >", "Matt Battifarano <matthew.battifarano@gmail.com>", ]

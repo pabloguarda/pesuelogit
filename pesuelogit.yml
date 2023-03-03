@@ -1,4 +1,4 @@
-name: gisuelogit
+name: pesuelogit
 channels:
   - apple
   - conda-forge

@@ -16,11 +16,11 @@ print('main dir:', main_dir)
 # isl.config.dirs['read_network_data'] = "input/network-data/SiouxFalls/"
 
 # Internal modules
-from src.gisuelogit.models import UtilityParameters, BPRParameters, ODParameters, GISUELOGIT, AETSUELOGIT, NGD
-from src.gisuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator, ColumnGenerator
-from src.gisuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data
-from src.gisuelogit.experiments import MultidayExperiment, ConvergenceExperiment
-from src.gisuelogit.visualizations import plot_predictive_performance
+from src.pesuelogit.models import UtilityParameters, BPRParameters, ODParameters, PESUELOGIT, AETSUELOGIT, NGD
+from src.pesuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator, ColumnGenerator
+from src.pesuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data
+from src.pesuelogit.experiments import MultidayExperiment, ConvergenceExperiment
+from src.pesuelogit.visualizations import plot_predictive_performance
 
 # Seed for reproducibility
 _SEED = 2022

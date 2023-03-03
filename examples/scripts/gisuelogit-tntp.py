@@ -15,13 +15,13 @@ from sklearn import preprocessing
 from datetime import datetime
 
 # Internal modules
-from src.gisuelogit.visualizations import plot_predictive_performance, plot_heatmap_demands, plot_convergence_estimates, \
+from src.pesuelogit.visualizations import plot_predictive_performance, plot_heatmap_demands, plot_convergence_estimates, \
     plot_top_od_flows_periods, plot_utility_parameters_periods
-from src.gisuelogit.models import UtilityParameters, GISUELOGIT, BPRParameters, ODParameters, compute_rr, \
+from src.pesuelogit.models import UtilityParameters, PESUELOGIT, BPRParameters, ODParameters, compute_rr, \
     compute_insample_outofsample_error
-from src.gisuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator, ColumnGenerator
-from src.gisuelogit.etl import get_design_tensor, get_y_tensor, add_period_id
-from src.gisuelogit.descriptive_statistics import mse, btcg_mse, mnrmse, mape
+from src.pesuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator, ColumnGenerator
+from src.pesuelogit.etl import get_design_tensor, get_y_tensor, add_period_id
+from src.pesuelogit.descriptive_statistics import mse, btcg_mse, mnrmse, mape
 
 # Seed for reproducibility
 _SEED = 2023
@@ -175,7 +175,7 @@ if run_model['equilibrium']:
         accuracy=1e-4,
     )
 
-    suelogit = GISUELOGIT(
+    suelogit = PESUELOGIT(
         key='suelogit',
         # endogenous_flows=True,
         network=tntp_network,
@@ -262,7 +262,7 @@ if run_model['ode-nosuelogit']:
                                        # ods_sampling='demand',
                                        )
 
-    ode_nosuelogit = GISUELOGIT(
+    ode_nosuelogit = PESUELOGIT(
         key='ode-nosuelogit',
         network=tntp_network,
         dtype=tf.float64,
@@ -358,7 +358,7 @@ if run_model['ode']:
                                        # ods_sampling='demand',
                                        )
 
-    ode = GISUELOGIT(
+    ode = PESUELOGIT(
         key='ode',
         network=tntp_network,
         dtype=tf.float64,
@@ -408,7 +408,7 @@ if run_model['ode']:
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(ode.q - tntp_network.q.flatten())): 0.2f}")
 
 if run_model['lue']:
-    print('\n model 1: Benchmark of gisuelogit and isuelogit (utility only with link count and traveltime data)')
+    print('\n model 1: Benchmark of pesuelogit and isuelogit (utility only with link count and traveltime data)')
 
     # optimizer = NGD(learning_rate=_LR)
     # optimizer = tf.keras.optimizers.SGD(learning_rate=_LR)
@@ -455,7 +455,7 @@ if run_model['lue']:
         accuracy=1e-4,
     )
 
-    lue = GISUELOGIT(
+    lue = PESUELOGIT(
         key='lue',
         # endogenous_flows=True,
         network=tntp_network,
@@ -543,7 +543,7 @@ if run_model['lpe']:
         accuracy=1e-4,
     )
 
-    lpe = GISUELOGIT(
+    lpe = PESUELOGIT(
         key='lpe',
         network=tntp_network,
         dtype=tf.float64,
@@ -635,7 +635,7 @@ if run_model['odlue']:
         accuracy=1e-4,
     )
 
-    odlue = GISUELOGIT(
+    odlue = PESUELOGIT(
         key='odlue',
         network=tntp_network,
         dtype=tf.float64,
@@ -735,7 +735,7 @@ if run_model['odlulpe']:
         accuracy=1e-4,
     )
 
-    odlulpe = GISUELOGIT(
+    odlulpe = PESUELOGIT(
         key='odlulpe',
         network=tntp_network,
         dtype=tf.float64,
@@ -856,7 +856,7 @@ if run_model['odlulpee']:
         accuracy=1e-4,
     )
 
-    odlulpee = GISUELOGIT(
+    odlulpee = PESUELOGIT(
         key='odlulpee',
         network=tntp_network,
         dtype=tf.float64,
@@ -969,7 +969,7 @@ if run_model['tvodlulpe']:
                                  time_varying=True,
                                  trainable=True)
 
-    tvodlulpe = GISUELOGIT(
+    tvodlulpe = PESUELOGIT(
         key='tvodlulpe',
         network=tntp_network,
         dtype=tf.float64,
