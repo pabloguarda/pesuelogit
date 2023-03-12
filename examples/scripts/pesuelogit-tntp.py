@@ -116,7 +116,7 @@ _LOSS_WEIGHTS ={'od': 1, 'theta': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1,
 
 # Models
 list_models = ['equilibrium', 'lue', 'ode', 'ode-nosuelogit', 'lpe',
-               'odlue', 'odlulpe', 'odlulpee', 'tvodlulpe']
+               'odlue', 'odlulpe', 'odlulptte', 'tvodlulpe']
 
 # run_model = dict.fromkeys(list_models,True)
 run_model = dict.fromkeys(list_models, False)
@@ -127,8 +127,8 @@ run_model = dict.fromkeys(list_models, False)
 # run_model['ode-nosuelogit'] = True
 # run_model['lpe'] = True
 # run_model['odlue'] = True
-run_model['odlulpe'] = True
-run_model['odlulpee'] = True
+# run_model['odlulpe'] = True
+run_model['odlulptte'] = True
 # run_model['tvodlulpe'] = True
 
 train_results_dfs = {}
@@ -803,7 +803,7 @@ if run_model['odlulpe']:
     print(f"MAPE link flows={mape(actual=odlulpe.observed_flows, predicted = odlulpe.predicted_flow()):0.1f}, "
           f"MAPE travel times={mape(actual=odlulpe.observed_traveltimes, predicted = odlulpe.predicted_traveltime()):0.1f}")
 
-if run_model['odlulpee']:
+if run_model['odlulptte']:
     # _RELATIVE_GAP = 1e-10
 
     print('\nODLULPEE: ODLULPE with no equilibrium component')
@@ -856,8 +856,8 @@ if run_model['odlulpee']:
         accuracy=1e-4,
     )
 
-    odlulpee = PESUELOGIT(
-        key='odlulpee',
+    odlulptte = PESUELOGIT(
+        key='odlulptte',
         network=tntp_network,
         dtype=tf.float64,
         endogenous_flows=False,
@@ -867,8 +867,8 @@ if run_model['odlulpee']:
         od=od_parameters,
     )
 
-    train_results_dfs['odlulpee'], val_results_dfs['odlulpee'] \
-        = odlulpee.train(
+    train_results_dfs['odlulptte'], val_results_dfs['odlulptte'] \
+        = odlulptte.train(
         X_train, Y_train, X_test, Y_test,
         optimizer=optimizer,
         batch_size=_BATCH_SIZE,
@@ -881,61 +881,61 @@ if run_model['odlulpee']:
     )
 
     train_results_estimates, train_results_losses \
-        = odlulpee.split_results(results=train_results_dfs['odlulpee'])
+        = odlulptte.split_results(results=train_results_dfs['odlulptte'])
     val_results_estimates, val_results_losses \
-        = odlulpee.split_results(results=val_results_dfs['odlulpee'])
+        = odlulptte.split_results(results=val_results_dfs['odlulptte'])
 
     print(compute_insample_outofsample_error(Y=Y_train,
                                              true_counts=df.true_counts.values[0:tntp_network.get_n_links()],
                                              true_traveltimes=df.true_traveltime.values[0:tntp_network.get_n_links()],
-                                             model=odlulpee))
+                                             model=odlulptte))
 
-    # plt.scatter(x = odlulpee.flows().numpy().flatten(), y = odlulpee.traveltimes().numpy().flatten())
+    # plt.scatter(x = odlulptte.flows().numpy().flatten(), y = odlulptte.traveltimes().numpy().flatten())
     # plt.show()
 
-    sns.scatterplot(data = pd.DataFrame({'link flow': odlulpee.predicted_flow().numpy().flatten(),
-                                         'travel time': odlulpee.predicted_traveltime().numpy().flatten(),
-                                         'capacity': [link.bpr.k for link in odlulpee.network.links]}),
+    sns.scatterplot(data = pd.DataFrame({'link flow': odlulptte.predicted_flow().numpy().flatten(),
+                                         'travel time': odlulptte.predicted_traveltime().numpy().flatten(),
+                                         'capacity': [link.bpr.k for link in odlulptte.network.links]}),
                                         x = 'link flow', y = 'travel time')
 
 
 
     plot_predictive_performance(train_losses= train_results_losses,
-                                val_losses =val_results_dfs['odlulpee'],
+                                val_losses =val_results_dfs['odlulptte'],
                                 xticks_spacing = 250)
 
     plot_convergence_estimates(estimates=
                                train_results_estimates.assign(
                                    rr = train_results_estimates['tt_sd']/train_results_estimates['tt'])[['epoch','rr']],
-                               true_values={'rr':odlulpee.utility.true_values['tt_sd']
-                                                 /odlulpee.utility.true_values['tt']})
+                               true_values={'rr':odlulptte.utility.true_values['tt_sd']
+                                                 /odlulptte.utility.true_values['tt']})
 
     plot_convergence_estimates(estimates=train_results_estimates[['epoch','alpha','beta']],
-                               true_values=odlulpee.bpr.true_values)
+                               true_values=odlulptte.bpr.true_values)
 
-    # sns.displot(pd.melt(pd.DataFrame({'alpha':odlulpee.alpha, 'beta': odlulpee.beta}), var_name = 'parameters'),
+    # sns.displot(pd.melt(pd.DataFrame({'alpha':odlulptte.alpha, 'beta': odlulptte.beta}), var_name = 'parameters'),
     #             x="value", hue="parameters", multiple="stack", kind="kde", alpha = 0.8)
     #
-    # sns.displot(pd.DataFrame({'fixed_effect':np.array(odlulpee.fixed_effect)}),
+    # sns.displot(pd.DataFrame({'fixed_effect':np.array(odlulptte.fixed_effect)}),
     #             x="fixed_effect", multiple="stack", kind="kde", alpha = 0.8)
 
     Qs = {'true': tntp_network.OD.Q_true, 'historic': Q_historic,
-          'estimated': tf.sparse.to_dense(odlulpee.Q).numpy()}
+          'estimated': tf.sparse.to_dense(odlulptte.Q).numpy()}
 
     plot_heatmap_demands(Qs=Qs, vmin=np.min(Qs['true']), vmax=np.max(Qs['true']), subplots_dims=(1, 3), figsize=(12, 4))
 
     plt.show()
 
-    theta = dict(zip(utility_parameters.true_values.keys(), list(np.round(odlulpee.theta.numpy().flatten(),2))))
+    theta = dict(zip(utility_parameters.true_values.keys(), list(np.round(odlulptte.theta.numpy().flatten(),2))))
     print(f"theta = {theta}, "
           f"rr = {train_results_estimates.eval('tt_sd/tt').values[-1]:0.2f}")
-    print(f"alpha = {np.mean(odlulpee.alpha): 0.2f}, "
-          f"beta  = {np.mean(odlulpee.beta): 0.2f}")
+    print(f"alpha = {np.mean(odlulptte.alpha): 0.2f}, "
+          f"beta  = {np.mean(odlulptte.beta): 0.2f}")
     print(f"Avg abs diff between observed and estimated OD: "
-          f"{np.mean(np.abs(odlulpee.q - tntp_network.q.flatten())): 0.2f}")
+          f"{np.mean(np.abs(odlulptte.q - tntp_network.q.flatten())): 0.2f}")
 
-    print(f"MAPE link flows={mape(actual=odlulpee.observed_flows, predicted = odlulpee.flows()):0.1f},"
-          f"MAPE travel times={mape(actual=odlulpee.observed_traveltimes, predicted = odlulpee.traveltimes()):0.1f}")
+    print(f"MAPE link flows={mape(actual=odlulptte.observed_flows, predicted = odlulptte.flows()):0.1f},"
+          f"MAPE travel times={mape(actual=odlulptte.observed_traveltimes, predicted = odlulptte.traveltimes()):0.1f}")
 
 if run_model['tvodlulpe']:
     print('\ntvodlulpe: Time specific utility and OD, link performance parameters, no historic OD')
@@ -1034,9 +1034,9 @@ predictions = pd.DataFrame({'link_key': list(tntp_network.links_keys) * Y_train.
 
 predictions['period'] = df.period
 
-for model in [lue,odlue,odlulpe,odlulpee]:
+for model in [lue,odlue,odlulpe,odlulptte]:
 
-    model = odlulpee
+    model = odlulptte
 
     predicted_flows = model.flows()
     predicted_traveltimes = model.traveltimes()
