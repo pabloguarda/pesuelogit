@@ -928,11 +928,13 @@ class PESUELOGIT(tf.keras.Model):
 
     def predicted_traveltime(self):
 
-        if self.endogenous_flows:
-            return self.traveltimes()
+        return self.traveltimes()
 
-        elif not self.endogenous_flows:
-            return self.bpr_traveltimes(self.predicted_flow())
+        # if self.endogenous_flows:
+        #     return self.traveltimes()
+        #
+        # elif not self.endogenous_flows:
+        #     return self.bpr_traveltimes(self.predicted_flow())
 
     def loss_function(self,
                       X,
@@ -1013,7 +1015,8 @@ class PESUELOGIT(tf.keras.Model):
                 'tt': loss_metric(actual=self.observed_traveltimes, predicted=predicted_traveltimes),
                 # 'theta': tf.reduce_mean(tf.norm(self.theta, 1)),
                 # #todo: review bpr or tt loss, should they be equivalent?
-                'bpr': loss_metric(actual=self.observed_traveltimes, predicted=predicted_traveltimes),
+                'bpr': loss_metric(actual=self.bpr_traveltimes(predicted_flow),
+                                   predicted=predicted_traveltimes),
                 'total': tf.constant(0, tf.float64)})
 
 
@@ -1192,7 +1195,6 @@ class PESUELOGIT(tf.keras.Model):
         if np.sum(self.flows().numpy()) == 0:
 
             predicted_flow = self.compute_link_flows(X_train)
-            predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
 
             # if self.endogenous_flows:
             # Smart initialization is performed running a single pass of traffic assignment under initial theta and q
@@ -1210,6 +1212,7 @@ class PESUELOGIT(tf.keras.Model):
             # self._flows.assign(tf.squeeze(tf.reduce_mean(self.call(tf.unstack(Y_train,axis = -1)[1]),axis=-1)))
 
             if self.endogenous_traveltimes:
+                predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
                 self._traveltimes.assign(tf.reduce_mean(predicted_traveltimes, axis = 0))
 
         epoch = 0
@@ -1410,16 +1413,17 @@ class PESUELOGIT(tf.keras.Model):
         val_losses_df = pd.concat([pd.DataFrame([losses_epoch], index=[0]).astype(float).assign(epoch = epoch)
                                    for epoch, losses_epoch in enumerate(val_losses)])
 
-        # Replace equilibirum loss in first epoch with the second epoch, to avoid zero loss when initializing utility parameters to zero
+        # Replace equilibirum loss in first epoch with the second epoch, to avoid zero relative loss due to the
+        # initialization strategy for link flows.
         train_losses_df.loc[train_losses_df['epoch'] == 0,'loss_eq_flow'] \
             = train_losses_df.loc[train_losses_df['epoch'] == 1,'loss_eq_flow'].copy()
         val_losses_df.loc[val_losses_df['epoch'] == 0, 'loss_eq_flow'] \
             = val_losses_df.loc[val_losses_df['epoch'] == 1, 'loss_eq_flow'].copy()
 
-        train_losses_df.loc[train_losses_df['epoch'] == 0,'loss_od'] \
-            = train_losses_df.loc[train_losses_df['epoch'] == 1,'loss_od'].copy()
-        val_losses_df.loc[val_losses_df['epoch'] == 0, 'loss_od'] \
-            = val_losses_df.loc[val_losses_df['epoch'] == 1, 'loss_od'].copy()
+        # train_losses_df.loc[train_losses_df['epoch'] == 0,'loss_od'] \
+        #     = train_losses_df.loc[train_losses_df['epoch'] == 1,'loss_od'].copy()
+        # val_losses_df.loc[val_losses_df['epoch'] == 0, 'loss_od'] \
+        #     = val_losses_df.loc[val_losses_df['epoch'] == 1, 'loss_od'].copy()
 
         train_results_df = pd.concat([train_losses_df.reset_index(drop=True),
                                       pd.concat(estimates, axis=0).reset_index(drop=True)], axis=1).\
