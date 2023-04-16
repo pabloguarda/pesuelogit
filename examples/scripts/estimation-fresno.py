@@ -30,7 +30,7 @@ from src.pesuelogit.visualizations import plot_predictive_performance, plot_conv
 from src.pesuelogit.networks import load_k_shortest_paths, read_paths, build_fresno_network, \
     Equilibrator, sparsify_OD, ColumnGenerator, read_OD
 from src.pesuelogit.etl import get_design_tensor, get_y_tensor, data_curation, temporal_split, add_period_id, get_tensors_by_year
-from src.pesuelogit.descriptive_statistics import mse, btcg_mse, nrmse, mnrmse
+from src.pesuelogit.descriptive_statistics import mse, btcg_mse, nrmse, mnrmse, mape
 
 # Seed for reproducibility
 _SEED = 2023
@@ -55,11 +55,11 @@ read_OD(network=fresno_network, sparse=True)
 
 # Read paths
 # read_paths(network=fresno_network, update_incidence_matrices=True, filename='paths-fresno.csv')
-# read_paths(network=fresno_network, update_incidence_matrices=True, filename = 'paths-full-model-fresno.csv')
+read_paths(network=fresno_network, update_incidence_matrices=True, filename = 'paths-full-model-fresno.csv')
 
 # For quick testing (do not need to read_paths before)
-Q = fresno_network.load_OD(sparsify_OD(fresno_network.Q, prop_od_pairs=0.99))
-load_k_shortest_paths(network=fresno_network, k=2, update_incidence_matrices=True)
+# Q = fresno_network.load_OD(sparsify_OD(fresno_network.Q, prop_od_pairs=0.99))
+# load_k_shortest_paths(network=fresno_network, k=2, update_incidence_matrices=True)
 
 ## Read spatiotemporal data
 folderpath = isl.config.dirs['read_network_data'] + 'links/spatiotemporal-data/'
@@ -289,22 +289,23 @@ run_model = dict.fromkeys(['equilibrium', 'lue', 'ode', 'odlue', 'odlulpe-1','od
 # run_model['equilibrium'] = True
 # run_model['lue'] = True
 # run_model['ode'] = True
-# run_model['odlue'] = True
+run_model['odlue'] = True
 # run_model['odlulpe-1'] = True
 # run_model['odlulpe'] = True
-run_model['tvodlulpe'] = True
+# run_model['tvodlulpe'] = True
 # run_model['test_tvodlulpe'] = True
 
 train_results_dfs = {}
 test_results_dfs = {}
 
 # For testing
+_EPOCHS = {'learning': 150, 'equilibrium': 60}
 # _EPOCHS = {'learning': 10, 'equilibrium': 1}
-_EPOCHS = {'learning': 10, 'equilibrium': 3}
-_BATCH_SIZE = 16
+# _EPOCHS = {'learning': 4, 'equilibrium': 20}
+_BATCH_SIZE = None #16
 _LR = 1e-1
-_RELATIVE_GAP = 1e-5
-_XTICKS_SPACING = 50
+_RELATIVE_GAP = 1e-20
+_XTICKS_SPACING = 5
 _EPOCHS_PRINT_INTERVAL = 1
 
 # _LOSS_METRIC  = mnrmse
@@ -312,8 +313,8 @@ _LOSS_METRIC  = nrmse
 
 # Excluding historic OD gives more freedom for the model to find an equilibria and minimize reconstruction error
 _LOSS_WEIGHTS ={'od': 0, 'tt': 1, 'flow': 1, 'eq_flow': 1, 'prop_od': 1, 'ntrips': 1}
-_MOMENTUM_EQUILIBRIUM = 0.99
-#_MOMENTUM_EQUILIBRIUM = 1
+# _MOMENTUM_EQUILIBRIUM = 0.99
+_MOMENTUM_EQUILIBRIUM = 1
 
 # Including historic OD matrix
 # _LOSS_WEIGHTS ={'od': 1, 'tt': 1, 'flow': 1, 'eq_flow': 1}
@@ -911,6 +912,8 @@ if run_model['odlulpe']:
     print(f"alpha = {np.mean(odlulpe.alpha): 0.2f}, beta  = {np.mean(odlulpe.beta): 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(odlulpe.q - fresno_network.q.flatten())): 0.2f}")
     print(f"Avg observed OD: {np.mean(np.abs(fresno_network.q.flatten())): 0.2f}")
+    print(f"MSE link flows={mse(actual=odlulpe.observed_flows, predicted = odlulpe.predicted_flow()).numpy():0.2g}, "
+          f"MSE travel times={mse(actual=odlulpe.observed_traveltimes, predicted = odlulpe.predicted_traveltime()).numpy():0.2g}")
 
 if run_model['tvodlulpe']:
     print('\ntvodlulpe: Time specific utility and OD, link performance parameters, no historic OD')
@@ -998,6 +1001,13 @@ if run_model['tvodlulpe']:
     print(f"alpha = {np.mean(tvodlulpe.alpha): 0.2f}, beta  = {np.mean(tvodlulpe.beta): 0.2f}")
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(tvodlulpe.q - fresno_network.q.flatten())): 0.2f}")
     print(f"Avg observed OD: {np.mean(np.abs(fresno_network.q.flatten())): 0.2f}")
+    print(f"MAPE link flows={mape(actual=tvodlulpe.observed_flows, predicted=tvodlulpe.flows()):0.1f},"
+          f"MAPE travel times={mape(actual=tvodlulpe.observed_traveltimes, predicted=tvodlulpe.traveltimes()):0.1f}")
+    print(f"MSE link flows={mse(actual=tvodlulpe.observed_flows, predicted=tvodlulpe.predicted_flow()).numpy():0.2g}, "
+          f"MSE travel times={mse(actual=tvodlulpe.observed_traveltimes, predicted=tvodlulpe.predicted_traveltime()).numpy():0.2g},"
+           f"MSE equilibrium flows={mse(actual=tvodlulpe.flows(), predicted=tvodlulpe.compute_link_flows(XT_train)).numpy():0.2g}")
+
+
 
 if run_model['test_tvodlulpe']:
     print('\ntvodlulpe: Time specific utility and OD, link performance parameters, no historic OD')
@@ -1097,31 +1107,30 @@ train_results_df, val_results_df \
 train_results_df.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')}_train_results_{'Fresno'}.csv")
 val_results_df.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')}_validation_results_{'Fresno'}.csv")
 
-## Write predictions
-
-predictions = pd.DataFrame({'link_key': list(fresno_network.links_keys) * Y_train.shape[0],
-                            'link_type': [link.link_type for link in fresno_network.links] * Y_train.shape[0],
-                            'observed_traveltime': Y_train[:, :, 0].numpy().flatten(),
-                            'observed_flow': Y_train[:, :, 1].numpy().flatten()})
-
-
-
-predictions['date'] = sorted(df[df.hour == 16].loc[df[df.hour == 16].year == 2019, 'date'])
-
-for model in [lue,odlue,odlulpe]:
-    # model = odlue
-    predicted_flows = model.flows()
-    predicted_traveltimes = model.traveltimes()
-
-    predictions['predicted_traveltime_' + model.key] = np.tile(predicted_traveltimes, (Y_train.shape[0], 1)).flatten()
-    predictions['predicted_flow_' + model.key] = np.tile(predicted_flows, (Y_train.shape[0], 1)).flatten()
-
-predictions.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')}_train_predictions_{'Fresno'}.csv")
+# ## Write predictions
+#
+# predictions = pd.DataFrame({'link_key': list(fresno_network.links_keys) * Y_train.shape[0],
+#                             'observed_traveltime': Y_train[:, :, 0].numpy().flatten(),
+#                             'observed_flow': Y_train[:, :, 1].numpy().flatten()})
+#
+# predictions['date'] = sorted(df[df.hour == 16].loc[df[df.hour == 16].year == 2019, 'date'])
+#
+# # TODO: Write predictions for TVODLULPE model
+# for model in [lue,odlue,odlulpe]:
+#
+#     predicted_flows = model.flows()
+#     predicted_traveltimes = model.traveltimes()
+#
+#     predictions['predicted_traveltime_' + model.key] = np.tile(predicted_traveltimes, (Y_train.shape[0], 1)).flatten()
+#     predictions['predicted_flow_' + model.key] = np.tile(predicted_flows, (Y_train.shape[0], 1)).flatten()
+#
+# predictions.to_csv(f"./output/tables/{datetime.now().strftime('%y%m%d%H%M%S')}_train_predictions_{'Fresno'}.csv")
 
 
 ## Summary of models parameters
+# models = [lue,odlue,odlulpe, tvodlulpe]
+models = [tvodlulpe]
 
-models = [lue,odlue,odlulpe, tvodlulpe]
 results = pd.DataFrame({'parameter': [], 'model': []})
 
 for model in models:
@@ -1158,7 +1167,7 @@ print(results_losses[['model'] + loss_columns].round(1))
 
 ## Plot of convergence toward true rr across models
 
-models = [lue,odlue,odlulpe, tvodlulpe]
+# models = [lue,odlue,odlulpe, tvodlulpe]
 
 train_estimates = {}
 train_losses = {}
@@ -1179,7 +1188,7 @@ fig, ax = plt.subplots(nrows=1, ncols=1)
 
 g = sns.lineplot(data=estimates, x='epoch', hue='model', y='rr')
 
-ax.set_ylabel('reliability ratio')
+ax.set_ylabel('average reliability ratio')
 
 plt.ylim(ymin=0)
 
@@ -1187,9 +1196,9 @@ plt.show()
 
 # Plot of relibility ratio by hour for all models
 
-plot_rr_by_period_models(models, period_keys, period_feature='hour')
+reliability_ratios = plot_rr_by_period_models(models, period_keys, period_feature='hour')
+plt.show()
 
 # Plot of total trips by hour for all models
-
 plot_total_trips_models(models = models, period_feature = 'hour', period_keys = period_keys)
 plt.show()
