@@ -1,4 +1,4 @@
-Parameter Estimation of Stochastic User Equilibrium with LOGIT assignment models (PESUELOGIT)
+Parameter Estimation of Stochastic User Equilibrium with LOGIT assignment models (pesuelogit)
 ==============================================================================
 
 
