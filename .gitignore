@@ -162,5 +162,7 @@ cython_debug/
 .idea/
 
 examples/scripts/extra-gps/
-
-
+!/examples/scripts/estimation-fresno.py
+!/examples/scripts/experiments-siouxfalls.py
+!/examples/scripts/experiments-tntp.py
+!/examples/scripts/odlue-tntp.py
