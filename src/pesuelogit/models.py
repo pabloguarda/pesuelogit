@@ -918,6 +918,16 @@ class PESUELOGIT(tf.keras.Model):
 
         return mask2*mask1*tt
 
+    def mask_observed_flow(self, flow):
+
+        # Remove cases where there are no path traversing the link
+        observed_flow = flow.numpy()
+        for i in range(observed_flow.shape[0]):
+            observed_flow[i, :] = observed_flow[i, :]*tf.cast(tf.reduce_sum(self.D, 1) >= 1, tf.float64)
+
+        return observed_flow
+
+
     def predicted_flow(self):
 
         if self.endogenous_flows:
@@ -971,9 +981,10 @@ class PESUELOGIT(tf.keras.Model):
             self.observed_traveltimes = self.mask_observed_traveltimes(tt = self.observed_traveltimes,
                                                                        k = np.array([link.bpr.k for link in self.network.links]))
 
+            self.observed_flows = self.mask_observed_flow(self.observed_flows)
+
             self.X = X
             self.period_ids = self.X[:, :, -1]
-
 
             # predicted_flow = self.compute_link_flows(X)
             # output_flow = predicted_flow
@@ -983,16 +994,19 @@ class PESUELOGIT(tf.keras.Model):
 
             output_flow = self.compute_link_flows(X)
 
-            # if epoch is not None and epoch == 0:
-            #     # Benchmark loss for calculation of relative loss
-            #     predicted_flow = self.flows()
-
-                # loss['eq_flow'] = loss_metric(actual=self.bpr_flows(self.traveltimes()), predicted=output_flow)
             predicted_flow = self.predicted_flow()
+            # predicted_flow = output_flow
+
             predicted_traveltimes = self.predicted_traveltime()
 
             # loss['eq_flow'] = loss_metric(actual=predicted_flow, predicted=output_flow)
-            loss['eq_flow'] = loss_metric(actual=self.flows(), predicted=output_flow)
+            # loss['eq_flow'] = loss_metric(actual=self.flows(), predicted=output_flow)
+            if loss_metric == nrmse:
+                loss['eq_flow'] = rmse(actual=self.flows(), predicted=output_flow)/\
+                                  tf.experimental.numpy.nanmean(self.observed_flows)
+            else:
+                loss['eq_flow'] = loss_metric(actual=self.flows(), predicted=output_flow)
+
 
             if self.endogenous_traveltimes:
                 loss['eq_tt'] = loss_metric(actual=self.traveltimes(), predicted=predicted_traveltimes)
@@ -1252,6 +1266,8 @@ class PESUELOGIT(tf.keras.Model):
         # Coverage of observed link flows and travel times
         coverages = np.round((tf.reduce_sum(tf.reduce_sum(tf.cast(~tf.math.is_nan(Y_train),tf.float64), 1),0)/(tf.size(Y_train)/2)).numpy(),2)
 
+        print('hyperparameters loss function:', loss_weights)
+
         while not terminate_algorithm:
 
             current_sue_objectives = []
@@ -1260,29 +1276,37 @@ class PESUELOGIT(tf.keras.Model):
                 path_flows = self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X_train))))
                 link_flow = self.link_flows(path_flows)
                 relative_x = float(np.nanmean(np.abs(tf.divide(link_flow,self.flows()) - 1)))
-                theta = tf.experimental.numpy.take(self.theta, tf.cast(self.period_ids[:, 0], dtype=tf.int32), 0)
-                # theta = self.theta
+                # theta = tf.experimental.numpy.take(self.theta, tf.cast(self.period_ids[:, 0], dtype=tf.int32), 0)
+                # # theta = self.theta
+                #
+                # for i in range(X_train.shape[0]):
+                #     sue_objective = sue_objective_function_fisk(
+                #         # f = path_flows[i,0,:].numpy().flatten(),
+                #         f=path_flows[i, :].numpy().flatten(),
+                #         # X = X_train[i, 0, :, :],
+                #         X=X_train[i, :, :],
+                #         theta = dict(zip(self.utility.features,theta[i])),
+                #         k_Z = self.utility.features_Z,
+                #         k_Y= self.utility.features_Y,
+                #         network = self.network)
+                #
+                #     current_sue_objectives.append(sue_objective)
+                #
+                # sue_objectives.append(current_sue_objectives)
 
-                for i in range(X_train.shape[0]):
-                    sue_objective = sue_objective_function_fisk(
-                        # f = path_flows[i,0,:].numpy().flatten(),
-                        f=path_flows[i, :].numpy().flatten(),
-                        # X = X_train[i, 0, :, :],
-                        X=X_train[i, :, :],
-                        theta = dict(zip(self.utility.features,theta[i])),
-                        k_Z = self.utility.features_Z,
-                        k_Y= self.utility.features_Y,
-                        network = self.network)
-
-                    current_sue_objectives.append(sue_objective)
-
-                sue_objectives.append(current_sue_objectives)
-
-                if len(sue_objectives)>=2:
-                    relative_gap = np.nanmean(np.abs(np.divide(sue_objectives[-1], sue_objectives[-2]) - 1))
-                    relative_gaps.append(relative_gap)
+                # if len(sue_objectives)>=2:
+                #     relative_gap = np.nanmean(np.abs(np.divide(sue_objectives[-1], sue_objectives[-2]) - 1))
+                #     relative_gaps.append(relative_gap)
                     # print(f"{relative_gap:0.2g}")
                     # print(sue_objective)
+                if epoch >= 1:
+                    normalizer = 1
+                    if self.flows().shape[0] < link_flow.shape[0]:
+                        normalizer = int(link_flow.shape[0]/self.flows().shape[0])
+
+                    # We now use the definition of relative residual
+                    relative_gap = (tf.norm(link_flow-self.flows(),1)/(normalizer*tf.norm(self.flows(),1))).numpy()
+                    relative_gaps.append(relative_gap)
 
                 # print(f"{i}: loss={loss.numpy():0.4g}, theta = {model.theta.numpy()}")
 
@@ -1477,6 +1501,27 @@ class PESUELOGIT(tf.keras.Model):
 
         return train_results_df, val_results_df
 
+    def get_initial_values(self, model = None):
+        
+        if model is None:
+            model = self
+        
+        link_flows = model.flows()
+        if model.n_periods > 1:
+            link_flows = tf.concat([tf.expand_dims(tf.reduce_mean(link_flows, axis=0), axis=0)
+                                    for link_flows in model.split_link_flows_by_period(model.flows())], axis=0)
+
+        initial_values = {'flows': link_flows,
+                          'theta': model.theta,
+                          'alpha': model.alpha,
+                          'beta': model.beta,
+                          'q': model.q,
+                          'fixed_effect': model.fixed_effect,
+                          'psc_factor': model.psc_factor,
+                          }
+        
+        return initial_values
+    
     def train_equilibrium(self, **kwargs):
 
         suelogit = PESUELOGIT(
@@ -1500,28 +1545,20 @@ class PESUELOGIT(tf.keras.Model):
                       'q': False
                       }
 
-        link_flows = self.flows()
-        if self.n_periods > 1:
-            link_flows = tf.concat([tf.expand_dims(tf.reduce_mean(link_flows, axis=0), axis=0)
-                                    for link_flows in self.split_link_flows_by_period(self.flows())], axis=0)
-
-        initial_values = {'flows': link_flows,
-                          'theta': self.theta,
-                          'alpha': self.alpha,
-                          'beta': self.beta,
-                          'q': self.q,
-                          'fixed_effect': self.fixed_effect,
-                          'psc_factor': self.psc_factor,
-                          }
-
         # predicted_flow = self.compute_link_flows(X_train)
         # predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
         # trainable_variables = self._flows
 
-        kwargs.update(trainables=trainables, initial_values=initial_values, equilibrium_stage = True)
+        kwargs.update(trainables=trainables, initial_values=self.get_initial_values(model=self),
+                      equilibrium_stage = True)
+
+        #tf.reduce_mean(self.flows())
 
         train_results_eq, val_results_eq = suelogit.train(
            **kwargs, loss_weights={'od': 0, 'theta': 0, 'tt': 0, 'flow': 0, 'eq_flow': 1})
+
+        # Update model parameters in the scope of the original model
+        self.create_tensor_variables(initial_values = self.get_initial_values(model=suelogit), trainables=trainables)
 
         return train_results_eq, val_results_eq
 
