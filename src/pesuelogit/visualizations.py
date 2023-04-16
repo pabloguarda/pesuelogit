@@ -9,7 +9,7 @@ from isuelogit.estimation import compute_vot
 from typing import Union, Dict, List, Tuple
 from isuelogit.mytypes import Matrix
 from .models import compute_rr
-
+import time
 
 
 def plot_convergence_estimates(estimates: pd.DataFrame,
@@ -43,7 +43,7 @@ def plot_convergence_estimates(estimates: pd.DataFrame,
     # fig.set_size_inches(4, 3)
 
     plt.xticks(np.arange(estimates['epoch'].min(), estimates['epoch'].max() + 1, xticks_spacing))
-    plt.xlim(xmin=estimates['epoch'].min(), xmax=estimates['epoch'].max())
+    plt.xlim(xmin=estimates['epoch'].min(), xmax=estimates['epoch'].max() + 2)
 
     plt.legend(prop={'size': 10})
 
@@ -59,9 +59,15 @@ def plot_rr_by_period_models(models, period_keys, period_feature='hour'):
             theta_dict = dict(zip(model.utility.features, list(model.theta[i].numpy())))
 
             label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]][period_feature])
-            label_period_feature_2 = label_period_feature_1 + 1
+            # label_period_feature_2 = label_period_feature_1 + 1
 
-            label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
+            #label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
+            label_period_feature = label_period_feature_1
+
+            if label_period_feature > 12:
+                label_period_feature = str(label_period_feature-12) + 'PM'
+            else:
+                label_period_feature = str(label_period_feature) + 'AM'
 
             theta_dict[period_feature + '_id'] = label_period_feature
             theta_dict[period_feature] = label_period_feature_1
@@ -139,15 +145,17 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
                  color='black', linestyle='--')
 
     # https://stackoverflow.com/questions/5484922/secondary-axis-with-twinx-how-to-add-to-legend
+    ticks = np.arange(train_losses['epoch'].min(), train_losses['epoch'].max() + xticks_spacing, xticks_spacing)
+
     plt.xticks(np.arange(train_losses['epoch'].min(), train_losses['epoch'].max() + 1, xticks_spacing))
-    plt.xlim(xmin=train_losses['epoch'].min(), xmax=train_losses['epoch'].max())
+    plt.xlim(xmin=train_losses['epoch'].min(), xmax=train_losses['epoch'].max() + 2)
 
     # plt.ylim(ymin=0, ymax=100)
     plt.ylim(ymin=0)
     plt.xlabel('epoch')
 
     # ax.set_ylabel('loss')
-    ax.set_ylabel('relative loss (%)')
+    ax.set_ylabel('relative mse (%)')
     # ax.set_ylabel('change in equilibrium metric (%)')
 
     # ax1.legend(loc = 0)
@@ -290,14 +298,21 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, historic_od, t
     """
 
     q_df = pd.DataFrame({})
+
     for i in range(model.q.shape[0]):
         # q_dict = dict(zip(fresno_network.ods, list(tvodlulpe.q[i].numpy())))
         q_dict = dict(zip(model.triplist, list(model.q[i].numpy())))
 
         label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]]['hour'])
-        label_period_feature_2 = label_period_feature_1+1
+        # label_period_feature_2 = label_period_feature_1+1
 
-        label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
+        # label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
+        label_period_feature = label_period_feature_1
+
+        if label_period_feature > 12:
+            label_period_feature = str(label_period_feature - 12) + 'PM'
+        else:
+            label_period_feature = str(label_period_feature) + 'AM'
 
         q_df = pd.concat([q_df,pd.DataFrame(q_dict, index=[label_period_feature])])
 
@@ -369,10 +384,11 @@ def plot_total_trips_models(models, period_feature, period_keys, historic_od: np
             # q_dict = dict(zip(fresno_network.ods, list(tvodlulpe.q[i].numpy())))
             q_dict = dict(zip(model.triplist, list(model.q[i].numpy())))
 
-            label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]][period_feature])
-            label_period_feature_2 = label_period_feature_1 + 1
+            label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]]['hour'])
+            label_period_feature_2 = label_period_feature_1+1
 
             label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
+            # label_period_feature = label_period_feature_1
 
             q_df = pd.concat([q_df,pd.DataFrame(q_dict, index=[label_period_feature])])
 
@@ -392,6 +408,11 @@ def plot_total_trips_models(models, period_feature, period_keys, historic_od: np
 
     total_trips_by_hour_models['model'] = pd.Categorical(total_trips_by_hour_models['model'], ['lue', 'odlue', 'odlulpe', 'tvodlulpe'])
 
+    # Replace hours to AM/PM format
+
+    total_trips_by_hour_models[period_feature] = total_trips_by_hour_models[period_feature].str.split('-').str[0].astype(str).\
+        apply(lambda x: time.strftime("%l%p", time.strptime(x,"%H")))
+
     fig, ax = plt.subplots(figsize = (5,4))
 
     g = sns.pointplot(data=total_trips_by_hour_models, x='hour', y='total_trips', ax=ax, join=False, hue='model',
@@ -408,7 +429,7 @@ def plot_total_trips_models(models, period_feature, period_keys, historic_od: np
 
     return total_trips_by_hour_models
 
-def plot_utility_parameters_periods(model, period_keys, period_feature, include_vot = False):
+def plot_utility_parameters_periods(model, period_keys, period_feature, include_vot = False, plot = True):
 
     theta_df = pd.DataFrame({})
 
@@ -439,16 +460,18 @@ def plot_utility_parameters_periods(model, period_keys, period_feature, include_
     cmap = sns.diverging_palette(10, 133, as_cmap=True)
     bound = np.nanmax(theta_df[[i for i in theta_df.columns if i!=period_feature]].abs().values)
 
-    fig, ax = plt.subplots()
+    if plot:
 
-    sns.heatmap(theta_df[[i for i in theta_df.columns if i!=period_feature]].transpose(),
-                linewidth=0.5, cmap=cmap,
-                vmin = -bound, vmax = bound, ax = ax)
+        fig, ax = plt.subplots()
 
-    plt.xlabel(period_feature, fontsize=12)
-    plt.ylabel('parameter', fontsize=12)
+        sns.heatmap(theta_df[[i for i in theta_df.columns if i!=period_feature]].transpose(),
+                    linewidth=0.5, cmap=cmap,
+                    vmin = -bound, vmax = bound, ax = ax)
 
-    # plt.show()
+        plt.xlabel(period_feature, fontsize=12)
+        plt.ylabel('parameter', fontsize=12)
+
+        # plt.show()
 
     return theta_df
 
