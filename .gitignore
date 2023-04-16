@@ -166,3 +166,4 @@ examples/scripts/estimation-fresno.py
 examples/scripts/experiments-siouxfalls.py
 examples/scripts/experiments-tntp.py
 examples/scripts/odlue-tntp.py
+examples/notebooks/aesue-tntp-experiments.ipynb
