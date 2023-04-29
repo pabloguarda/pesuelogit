@@ -3,12 +3,12 @@ channels:
   - apple
   - conda-forge
 dependencies:
-  - tensorflow-deps == 2.10
+  - tensorflow-deps >= 2.10
   - jupyter
   - pip
 #  - numpy
   - pip:
-    - tensorflow-macos == 2.9
+    - tensorflow-macos >= 2.9
 #    - tensorflow-deps == 2.10
 #    - tensorflow-metal==0.5.0
     - git+https://github.com/pabloguarda/isuelogit.git
