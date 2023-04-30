@@ -1,4 +1,5 @@
 name: pesuelogit
+version: 0.0.1
 channels:
   - apple
   - conda-forge
