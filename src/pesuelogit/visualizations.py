@@ -8,7 +8,7 @@ import numpy as np
 from isuelogit.estimation import compute_vot
 from typing import Union, Dict, List, Tuple
 from isuelogit.mytypes import Matrix
-from .models import compute_rr
+from pesuelogit.models import compute_rr
 import time
 
 

@@ -1,5 +1,6 @@
 import tensorflow as tf
 import numpy as np
+
 def error(actual: tf.constant, predicted: tf.constant, mask = None):
     # return tf.boolean_mask(predicted - actual, tf.math.is_finite(predicted - actual))
 

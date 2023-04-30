@@ -4,7 +4,7 @@ from isuelogit.printer import block_output, printIterationBar
 import tensorflow as tf
 import numpy as np
 from typing import Dict, List, Tuple
-from .networks import TransportationNetwork, Equilibrator
+from pesuelogit.networks import TransportationNetwork, Equilibrator
 
 def simulate_features(n_days, daytoday_variation = False, **kwargs):
 

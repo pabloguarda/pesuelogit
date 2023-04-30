@@ -9,8 +9,8 @@ from typing import Dict, List, Tuple
 from isuelogit.printer import block_output, printProgressBar, printIterationBar
 
 # from isuelogit.experiments import NetworkExperiment
-from .visualizations import *
-from .descriptive_statistics import mse, rmse, nrmse
+from pesuelogit.visualizations import *
+from pesuelogit.descriptive_statistics import mse, rmse, nrmse
 
 
 class NetworkExperiment(isl.experiments.NetworkExperiment):

@@ -12,9 +12,9 @@ from tensorflow import keras
 
 from typing import Dict, List, Tuple, Union
 import time
-from .networks import Equilibrator, ColumnGenerator, TransportationNetwork
+from pesuelogit.networks import Equilibrator, ColumnGenerator, TransportationNetwork
 from isuelogit.estimation import Parameter
-from .descriptive_statistics import error, mse, sse, rmse, nrmse, btcg_mse, mnrmse,l1norm, mape
+from pesuelogit.descriptive_statistics import error, mse, sse, rmse, nrmse, btcg_mse, mnrmse,l1norm, mape
 
 
 class NGD(tf.keras.optimizers.SGD):
