@@ -20,7 +20,7 @@ setup_requirements = ['pytest-runner', ]
 setup(
     author="Pablo Guarda",
     author_email='pabloguarda@cmu.edu',
-    python_requires='>=3.9',
+    python_requires='>=3.8',
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
         'Intended Audience :: Developers',
