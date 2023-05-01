@@ -10,47 +10,47 @@ def error(actual: tf.constant, predicted: tf.constant, mask = None):
     return tf.boolean_mask(predicted - actual, mask)
 
 
-def l1norm(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float64:
-    if weight == 0:
-        return tf.constant(0, tf.float64)
-    return tf.cast(weight*tf.norm(error(actual, predicted), 1),tf.float64)
+def l1norm(actual: tf.constant, predicted: tf.constant, weight = 1):
+    # if weight == 0:
+    #     return tf.constant(0, tf.float32)
+    return weight*tf.norm(error(actual, predicted), 1)
 
-def sse(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float64:
-    if weight == 0:
-        return tf.constant(0, tf.float64)
-    return tf.cast(weight*tf.reduce_sum(tf.math.pow(error(actual, predicted), 2)),tf.float64)
+def sse(actual: tf.constant, predicted: tf.constant, weight = 1):
+    # if weight == 0:
+    #     return tf.constant(0, tf.float32)
+    return weight*tf.reduce_sum(tf.math.pow(error(actual, predicted), 2))
 
-def mse(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float64:
-    if weight == 0:
-        return tf.constant(0, tf.float64)
-    return tf.cast(weight*tf.reduce_mean(tf.math.pow(error(actual, predicted), 2)),tf.float64)
+def mse(actual: tf.constant, predicted: tf.constant, weight = 1):
+    # if weight == 0:
+    #     return tf.constant(0, tf.float32)
+    return weight*tf.reduce_mean(tf.math.pow(error(actual, predicted), 2))
 
-def mape(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float64:
+def mape(actual: tf.constant, predicted: tf.constant, weight = 1):
     """
     Skip cases where the observed values are equal to zero or nan
     """
-    if weight == 0:
-        return tf.constant(0, tf.float64)
+    # if weight == 0:
+    #     return tf.constant(0, tf.float32)
 
-    mask = tf.cast(tf.math.is_finite(actual), tf.float32) * tf.cast(actual > 0, tf.float32)
+    mask = tf.cast(tf.math.is_finite(actual),tf.int32) * tf.cast(actual > 0, tf.int32)
 
     return 100*weight*tf.reduce_mean(tf.abs(error(actual, predicted, mask = mask))/tf.boolean_mask(actual, mask))
 
 
-def rmse(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float64:
-    if weight == 0:
-        return tf.constant(0, tf.float64)
-    return tf.cast(weight*tf.math.sqrt(mse(actual, predicted)),tf.float64)
+def rmse(actual: tf.constant, predicted: tf.constant, weight = 1):
+    # if weight == 0:
+    #     return tf.constant(0, tf.float32)
+    return weight*tf.math.sqrt(mse(actual, predicted))
 
-def nrmse(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float64:
-    if weight == 0:
-        return tf.constant(0, tf.float64)
+def nrmse(actual: tf.constant, predicted: tf.constant, weight = 1):
+    # if weight == 0:
+    #     return tf.constant(0, tf.float32)
     return weight*rmse(actual, predicted)/tf.experimental.numpy.nanmean(actual)
 
-def mnrmse(actual: tf.constant, predicted: tf.constant, weight = 1) -> tf.float64:
+def mnrmse(actual: tf.constant, predicted: tf.constant, weight = 1):
     """ Normalized rmse by the maximum observed value"""
-    if weight == 0:
-        return tf.constant(0, tf.float64)
+    # if weight == 0:
+    #     return tf.constant(0, tf.float32)
 
     return weight*rmse(actual, predicted)/tf.experimental.numpy.max(actual[~tf.experimental.numpy.isnan(actual)])
 

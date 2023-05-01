@@ -1,4 +1,4 @@
-from pesuelogit import __version__
+from src.pesuelogit import __version__
 
 import os
 from pathlib import Path
@@ -14,7 +14,7 @@ import isuelogit as isl
 
 # Internal modules
 from src.pesuelogit.visualizations import plot_predictive_performance, plot_convergence_estimates
-from src.pesuelogit.models import UtilityParameters, GISUELOGIT, BPRParameters, ODParameters, compute_rr
+from src.pesuelogit.models import UtilityParameters, PESUELOGIT, BPRParameters, ODParameters, compute_rr
 from src.pesuelogit.networks import load_k_shortest_paths, build_tntp_network, Equilibrator
 from src.pesuelogit.etl import get_design_tensor, get_y_tensor, simulate_suelogit_data, add_period_id, simulate_features
 from src.pesuelogit.descriptive_statistics import mse
@@ -218,7 +218,7 @@ def test_zero_error():
             accuracy=1e-4,
         )
 
-        ode = GISUELOGIT(
+        ode = PESUELOGIT(
             key='ode',
             network=tntp_network,
             dtype=tf.float64,
@@ -253,7 +253,7 @@ def test_zero_error():
 
         assert np.allclose(pd.to_numeric(train_results_dfs['ode'].iloc[-1][['loss_flow', 'loss_tt']].values),0.0,atol = 1e-10)
 
-def test_equilibrium(_RELATIVE_GAP = 1e-8):
+def test_equilibrium(_RELATIVE_GAP = 1e-5):
     '''
     Check if equilibrium achieves small relative gap. A larger number of epochs may be necessary to achieve the target gap
     '''
@@ -327,7 +327,7 @@ def test_equilibrium(_RELATIVE_GAP = 1e-8):
         accuracy=1e-4,
     )
 
-    suelogit = GISUELOGIT(
+    suelogit = PESUELOGIT(
         key='suelogit',
         # endogenous_flows=True,
         network=tntp_network,

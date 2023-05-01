@@ -319,13 +319,13 @@ class PESUELOGIT(tf.keras.Model):
         self.endogenous_traveltimes = False
         self._flows = None
 
-        kwargs['dtype'] = kwargs.get('dtype', tf.float64)
+        kwargs['dtype'] = kwargs.get('dtype', tf.float32)
 
         super().__init__(*args, **kwargs)
 
         # Parameters (i.e. tf variables)
-        self._alpha = tf.float64
-        self._beta = tf.float64
+        self._alpha = self.dtype
+        self._beta = self.dtype
         self.bpr = bpr
         self._psc_factor = None
         self._fixed_effect = None
@@ -406,15 +406,15 @@ class PESUELOGIT(tf.keras.Model):
             trainables = trainables_defaults
 
         initial_values_defaults = {
-            'flows': tf.constant(tf.zeros([self.n_periods,self.n_links], dtype=tf.float64)),
-            # 'flows': tf.constant(tf.zeros([self.n_links], dtype=tf.float64)),
+            'flows': tf.constant(tf.zeros([self.n_periods,self.n_links], dtype=self.dtype)),
+            # 'flows': tf.constant(tf.zeros([self.n_links], dtype=self.dtype)),
             'alpha': self.bpr.parameters['alpha'].initial_value,
             'beta': self.bpr.parameters['beta'].initial_value,
             'q': self.od.initial_values_array(),
             'theta': self.utility.initial_values_array(self.utility.features),
             'psc_factor':self.utility.initial_values['psc_factor'],
             'fixed_effect': tf.constant(self.utility.initial_values['fixed_effect'],
-                                        shape=tf.TensorShape(self.utility.shapes['fixed_effect']), dtype=tf.float64)
+                                        shape=tf.TensorShape(self.utility.shapes['fixed_effect']), dtype=self.dtype)
         }
 
         if initial_values is not None:
@@ -430,7 +430,7 @@ class PESUELOGIT(tf.keras.Model):
         self._flows = tf.Variable(
             initial_value=tf.math.sqrt(initial_values['flows']),
             # initial_value=initial_values['flows'],
-            # initial_value=tf.constant(tf.zeros([self.n_timepoints,self.n_links]), dtype=tf.float64),
+            # initial_value=tf.constant(tf.zeros([self.n_timepoints,self.n_links]), dtype=self.dtype),
             trainable= trainables['flows'],
             name='flows',
             dtype=self.dtype)
@@ -480,7 +480,7 @@ class PESUELOGIT(tf.keras.Model):
                 self._theta.append(
                     tf.Variable(
                         # initial_value= initial_values['theta'][feature],
-                        initial_value= tf.cast(initial_values['theta'][:,i],tf.float64),
+                        initial_value= tf.cast(initial_values['theta'][:,i],self.dtype),
                         trainable=trainables['theta'][feature],
                         name=feature,
                         dtype=self.dtype)
@@ -559,9 +559,9 @@ class PESUELOGIT(tf.keras.Model):
 
                 if sign == '+':
                     clips_min.append(0)
-                    clips_max.append(tf.float64.max)
+                    clips_max.append(self.dtype.max)
                 if sign == '-':
-                    clips_min.append(tf.float64.min)
+                    clips_min.append(self.dtype.min)
                     clips_max.append(0)
 
             return tf.clip_by_value(theta, clips_min, clips_max)
@@ -700,7 +700,7 @@ class PESUELOGIT(tf.keras.Model):
 
         '''
 
-        M_sparse = tf.cast(tf.sparse.from_dense(self.network.M), tf.float64)
+        M_sparse = tf.cast(tf.sparse.from_dense(self.network.M), self.dtype)
         # M_sparse = tf.sparse.concat(0, [tf.sparse.expand_dims(M_sparse, 0)] * vf.shape[1])
         M_sparse = tf.sparse.concat(0, [tf.sparse.expand_dims(M_sparse, 0)] * vf.shape[0])
 
@@ -875,7 +875,7 @@ class PESUELOGIT(tf.keras.Model):
             # It is assumed the equilibrium flows only varies according to the hour of the day
             observed_flow = Y[:, hour, :, 1]
 
-            n = tf.cast(tf.math.count_nonzero(~tf.math.is_nan(observed_flow)), tf.float64)
+            n = tf.cast(tf.math.count_nonzero(~tf.math.is_nan(observed_flow)), self.dtype)
 
             sum_mse += loss_metric(actual=observed_flow, predicted=predicted_flow) * n
             sum_n += n
@@ -893,7 +893,7 @@ class PESUELOGIT(tf.keras.Model):
         historic_od = tf.expand_dims(tf.constant(self.od.historic_values[1].q.flatten()), axis=0)
         if tf.rank(pred_q) > 1:
             extra_od_cols = tf.cast(tf.constant(float('nan'), shape=(pred_q.shape[0] - 1, tf.size(historic_od))),
-                                    tf.float64)
+                                    self.dtype)
             historic_od = tf.concat([historic_od, extra_od_cols], axis=0)
 
         # return tf.expand_dims(tf.constant(self.network.q.flatten()),axis =0)
@@ -923,7 +923,7 @@ class PESUELOGIT(tf.keras.Model):
         # Remove cases where there are no path traversing the link
         observed_flow = flow.numpy()
         for i in range(observed_flow.shape[0]):
-            observed_flow[i, :] = observed_flow[i, :]*tf.cast(tf.reduce_sum(self.D, 1) >= 1, tf.float64)
+            observed_flow[i, :] = observed_flow[i, :]*tf.cast(tf.reduce_sum(self.D, 1) >= 1, self.dtype)
 
         return observed_flow
 
@@ -972,7 +972,7 @@ class PESUELOGIT(tf.keras.Model):
         for attr, val in lambdas.items():
             lambdas_vals[attr] = val
 
-        loss = dict.fromkeys(list(lambdas_vals.keys()) + ['total'], tf.constant(0, dtype=tf.float64))
+        loss = dict.fromkeys(list(lambdas_vals.keys()) + ['total'], tf.constant(0, dtype=self.dtype))
 
         if Y.shape[-1] > 0:
 
@@ -1017,13 +1017,13 @@ class PESUELOGIT(tf.keras.Model):
             # np.nanmean(self.observed_traveltimes)
             # np.nanmean(predicted_traveltimes)
 
+            historic_od = tf.cast(self.od.historic_values_array,self.dtype)
+
             loss.update({
-                'od': loss_metric(actual=self.od.historic_values_array,
-                                  predicted=self.q),
+                'od': loss_metric(actual=historic_od, predicted=self.q),
                 'ntrips': sse(actual=np.sum(self.q,axis = 1),
-                              predicted=self.od.total_trips_array)/self.od.historic_values_array.shape[1],
-                'prop_od': loss_metric(actual=normalize_od(tf.constant(self.od.historic_values_array)),
-                                  predicted=normalize_od(self.q)),
+                              predicted=self.od.total_trips_array)/historic_od.shape[1],
+                'prop_od': loss_metric(actual=normalize_od(historic_od), predicted=normalize_od(self.q)),
                 'flow': loss_metric(actual=self.observed_flows, predicted=predicted_flow),
                 # 'flow': loss_metric(actual=self.observed_flows, predicted=output_flow),
                 'tt': loss_metric(actual=self.observed_traveltimes, predicted=predicted_traveltimes),
@@ -1031,25 +1031,25 @@ class PESUELOGIT(tf.keras.Model):
                 # #todo: review bpr or tt loss, should they be equivalent?
                 'bpr': loss_metric(actual=self.bpr_traveltimes(predicted_flow),
                                    predicted=predicted_traveltimes),
-                'total': tf.constant(0, tf.float64)})
+                'total': tf.constant(0, self.dtype)})
 
 
         # self.traveltimes()
         # tf.squeeze(predicted_traveltimes)[0]
 
-        lambdas = {k: tf.constant(v, name="lambda_" + k, dtype=tf.float64) for k, v in lambdas_vals.items()}
+        lambdas = {k: tf.constant(v, name="lambda_" + k, dtype=self.dtype) for k, v in lambdas_vals.items()}
 
-        # lambdas = {'od': tf.constant(lambdas_vals['od'], name="lambda_od", dtype=tf.float64),
-        #            'theta': tf.constant(lambdas_vals['theta'], name="lambda_theta", dtype=tf.float64),
-        #            'flow': tf.constant(lambdas_vals['flow'], name="lambda_flow", dtype=tf.float64),
-        #            'tt': tf.constant(lambdas_vals['tt'], name="lambda_tt", dtype=tf.float64),
-        #            'bpr': tf.constant(lambdas_vals['bpr'], name="lambda_bpr", dtype=tf.float64)
+        # lambdas = {'od': tf.constant(lambdas_vals['od'], name="lambda_od", dtype=self.dtype),
+        #            'theta': tf.constant(lambdas_vals['theta'], name="lambda_theta", dtype=self.dtype),
+        #            'flow': tf.constant(lambdas_vals['flow'], name="lambda_flow", dtype=self.dtype),
+        #            'tt': tf.constant(lambdas_vals['tt'], name="lambda_tt", dtype=self.dtype),
+        #            'bpr': tf.constant(lambdas_vals['bpr'], name="lambda_bpr", dtype=self.dtype)
         #            }
 
         for key, val in lambdas_vals.items():
             # if any(list(map(lambda x: isinstance(val, x), [float, int]))):
             if val > 0:
-                loss['total'] += lambdas[key] * loss[key]
+                loss['total'] += lambdas[key] * tf.cast(loss[key],self.dtype)
 
         # Add prefix "loss_"
         loss = {'loss_' + k: v for k, v in loss.items()}
@@ -1170,10 +1170,10 @@ class PESUELOGIT(tf.keras.Model):
         if generalization_error is None:
             generalization_error = {'train': False, 'validation': False}
 
-        X_train, Y_train = map(lambda x: copy.copy(tf.cast(x, tf.float64)), [X_train, Y_train])
+        X_train, Y_train = map(lambda x: copy.copy(tf.cast(x, self.dtype)), [X_train, Y_train])
 
         if X_val is not None and Y_val is not None:
-            X_val, Y_val = map(lambda x: copy.copy(tf.cast(x,tf.float64)),[X_val, Y_val])
+            X_val, Y_val = map(lambda x: copy.copy(tf.cast(x,self.dtype)),[X_val, Y_val])
 
             X_val = self.set_period_idxs(X=X_val)
 
@@ -1264,7 +1264,8 @@ class PESUELOGIT(tf.keras.Model):
         sue_objectives = []
 
         # Coverage of observed link flows and travel times
-        coverages = np.round((tf.reduce_sum(tf.reduce_sum(tf.cast(~tf.math.is_nan(Y_train),tf.float64), 1),0)/(tf.size(Y_train)/2)).numpy(),2)
+        coverages = np.round((tf.reduce_sum(tf.reduce_sum(tf.cast(~tf.math.is_nan(Y_train),self.dtype), 1),0)/
+                              (tf.cast(tf.size(Y_train),self.dtype)/2)).numpy(),2)
 
         print('hyperparameters loss function:', loss_weights)
 
@@ -1528,7 +1529,7 @@ class PESUELOGIT(tf.keras.Model):
             key='suelogit',
             # endogenous_flows=True,
             network=self.network,
-            dtype=tf.float64,
+            dtype=self.dtype,
             equilibrator=self.equilibrator,
             # column_generator=column_generator,
             utility=self.utility,
@@ -1625,16 +1626,16 @@ def compute_rr(parameters: Dict,
     # else:
     #     return float('nan')
 
-def compute_insample_outofsample_error(Y, true_counts, true_traveltimes, model, metric = mape):
+def compute_insample_outofsample_error(Y, true_counts, true_traveltimes, model, metric = mape, dtype = tf.float32):
     
     nonmissing_idxs = np.arange(0, len(Y[:, :, 1][0]))[~np.isnan(Y[:, :, 1][0].numpy())]
     missing_idxs = np.arange(0, len(Y[:, :, 1][0]))[np.isnan(Y[:, :, 1][0].numpy())]
 
-    true_counts_missing = true_counts.copy()
-    true_traveltime_missing = true_traveltimes.copy()
+    true_counts_missing = copy.deepcopy(true_counts)
+    true_traveltime_missing = copy.deepcopy(true_traveltimes)
 
-    true_counts_observed = true_counts.copy()
-    true_traveltime_observed = true_traveltimes.copy()
+    true_counts_observed = copy.deepcopy(true_counts)
+    true_traveltime_observed = copy.deepcopy(true_traveltimes)
 
     true_counts_missing[nonmissing_idxs] = float('nan')
     true_traveltime_missing[nonmissing_idxs] = float('nan')
@@ -1644,10 +1645,14 @@ def compute_insample_outofsample_error(Y, true_counts, true_traveltimes, model, 
 
     # print(mse(ode.flows(), df.true_counts[0:tntp_network.get_n_links()].values).numpy())
 
-    return pd.Series({'insample_error_flow': metric(true_counts_observed[np.newaxis,:],model.predicted_flow()).numpy(),
-               'insample_error_traveltime': metric(true_traveltime_observed[np.newaxis,:],model.predicted_traveltime()).numpy(),
-               'outofsample_error_flow': metric(true_counts_missing[np.newaxis,:],model.predicted_flow()).numpy(),
-               'outofsample_error_traveltime': metric(true_traveltime_missing[np.newaxis,:],model.predicted_traveltime()).numpy()
+    return pd.Series({'insample_error_flow': metric(tf.cast(true_counts_observed[np.newaxis,:],dtype),
+                                                    tf.cast(model.predicted_flow(),dtype)).numpy(),
+               'insample_error_traveltime': metric(tf.cast(true_traveltime_observed[np.newaxis,:],dtype),
+                                                   tf.cast(model.predicted_traveltime(),dtype)).numpy(),
+               'outofsample_error_flow': metric(tf.cast(true_counts_missing[np.newaxis,:],dtype),
+                                                        tf.cast(model.predicted_flow(),dtype)).numpy(),
+               'outofsample_error_traveltime': metric(tf.cast(true_traveltime_missing[np.newaxis,:],dtype),
+                                                              tf.cast(model.predicted_traveltime(),dtype)).numpy()
                })
     
     
@@ -1746,7 +1751,7 @@ class AETSUELOGIT(PESUELOGIT):
         if self.endogenous_traveltimes:
 
             self._traveltimes = tf.Variable(
-                # initial_value=tf.math.sqrt(tf.constant(tf.zeros(self.n_links, dtype=tf.float64))),
+                # initial_value=tf.math.sqrt(tf.constant(tf.zeros(self.n_links, dtype=self.dtype))),
                 initial_value=tf.tile(tf.expand_dims(self.tt_ff, 0), tf.constant([self.n_periods, 1])),
                 # initial_value=tf.math.sqrt(tf.tile(tf.expand_dims(self.tt_ff,0),tf.constant([self.n_timepoints,1]))),
                 # initial_value=tf.math.sqrt(tf.tile(tf.constant(self.tt_ff[tf.newaxis,tf.newaxis,:]),
@@ -1761,7 +1766,7 @@ class AETSUELOGIT(PESUELOGIT):
         """
         return tensorflow variable of dimension (n_hours, n_links) and initialized using average over hours-links
         """
-        return tf.clip_by_value(self._traveltimes, clip_value_min = tf.constant(self._tt_ff), clip_value_max = tf.float64.max)
+        return tf.clip_by_value(self._traveltimes, clip_value_min = tf.constant(self._tt_ff), clip_value_max = self.dtype.max)
         # return tf.math.pow(self._traveltimes,2)
 
         # return tf.math.pow(self._traveltimes,2)
