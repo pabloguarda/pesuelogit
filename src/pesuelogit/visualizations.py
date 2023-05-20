@@ -58,7 +58,7 @@ def plot_rr_by_period_models(models, period_keys, period_feature='hour'):
         for i in range(model.theta.shape[0]):
             theta_dict = dict(zip(model.utility.features, list(model.theta[i].numpy())))
 
-            label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]][period_feature])
+            label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]][period_feature].iloc[0])
             # label_period_feature_2 = label_period_feature_1 + 1
 
             #label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
@@ -303,7 +303,7 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, historic_od, t
         # q_dict = dict(zip(fresno_network.ods, list(tvodlulpe.q[i].numpy())))
         q_dict = dict(zip(model.triplist, list(model.q[i].numpy())))
 
-        label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]]['hour'])
+        label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]]['hour'].iloc[0])
         # label_period_feature_2 = label_period_feature_1+1
 
         # label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
@@ -439,7 +439,7 @@ def plot_utility_parameters_periods(model, period_keys, period_feature, include_
         if include_vot:
             theta_dict['vot'] = float(compute_rr(theta_dict))
 
-        label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]]['hour'])
+        label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]]['hour'].iloc[0])
         label_period_feature_2 = label_period_feature_1 + 1
 
         label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
