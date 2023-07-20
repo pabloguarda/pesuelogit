@@ -34,11 +34,14 @@ class TransportationNetwork(isl.networks.DiTNetwork):
 
     def set_bpr_functions(self,
                           bprdata: pd.DataFrame,
-                          parameters_keys=['alpha', 'beta', 'tf', 'k'],
+                          parameters_keys= None,
                           link_key: Optional[str] = None) -> None:
 
         if link_key is None:
             link_key = 'link_key'
+
+        if parameters_keys is None:
+            parameters_keys = ['alpha', 'beta', 'tf', 'k']
 
         links_keys = list(bprdata[link_key].values)
 
@@ -201,11 +204,16 @@ class ColumnGenerator():
         self.equilibrator.path_set_selection(*args, **kwargs)
 
 
-def build_tntp_network(network_name) -> TransportationNetwork:
+def build_tntp_network(network_name, folderpath = None, local_files = True) -> TransportationNetwork:
     '''
-    Read data from tntp repository and build network object
 
-    supported_networks = ['Anaheim', 'Austin', 'Barcelona', 'Berlin-Center', 'Berlin-Friedrichshain',
+    local_files: If False, data is read from tntp repository.
+
+    folderpath: path of the folder where a file ending with '_net' and '.tntp' extension is located. These files can
+    be found at https://github.com/bstabler/TransportationNetworks/tree/master
+
+    network_name: it can take any value from the following list
+                       ['Anaheim', 'Austin', 'Barcelona', 'Berlin-Center', 'Berlin-Friedrichshain',
                       'Berlin-Mitte-Center', 'Berlin-Mitte-Prenzlauerberg-Friedrichshain-Center',
                       'Berlin-Prenzlauerberg-Center', 'Berlin-Tiergarten', 'Birmingham-England', 'Braess-Example',
                       'chicago-regional', 'Chicago-Sketch', 'Eastern-Massachusetts', 'GoldCoast, Australia',
@@ -213,7 +221,8 @@ def build_tntp_network(network_name) -> TransportationNetwork:
                       'Winnipeg', 'Winnipeg-Asymmetric']
     '''
 
-    links_df = isl.reader.read_tntp_linkdata(network_name=network_name)
+    links_df = isl.reader.read_tntp_linkdata(network_name=network_name, folderpath = folderpath,
+                                             local_files = local_files)
     links_df['link_key'] = [(i, j, '0') for i, j in zip(links_df['init_node'], links_df['term_node'])]
 
     # # Normalize free flow travel time between 0 and 1
@@ -237,32 +246,6 @@ def build_tntp_network(network_name) -> TransportationNetwork:
     # link_features_df = links_df[['link_key', 'length', 'speed', 'link_type', 'toll']]
 
     return tntp_network
-
-
-def build_small_network(network_name):
-    network_generator = isl.factory.NetworkGenerator()
-
-    As, Qs = network_generator.get_A_Q_custom_networks([network_name])
-
-    network = TransportationNetwork(A=As[network_name], key=network_name)
-
-    network.load_OD(Q=Qs[network.key])
-
-    # Link performance functions
-    linkdata_generator = isl.factory.LinkDataGenerator()
-
-    if network.key == 'Yang':
-        bpr_parameters_df = linkdata_generator.generate_Yang_bpr_parameters()
-    elif network.key == 'Lo':
-        bpr_parameters_df = linkdata_generator.generate_LoChan_bpr_parameters()
-    elif network.key == 'Wang':
-        bpr_parameters_df = linkdata_generator.generate_Wang_bpr_parameters()
-    elif network.key == 'Toy':
-        bpr_parameters_df = linkdata_generator.generate_toy_bpr_parameters()
-
-    network.set_bpr_functions(bpr_parameters_df)
-
-    return network
 
 
 def build_fresno_network():
