@@ -384,7 +384,7 @@ def plot_total_trips_models(models, period_feature, period_keys, historic_od: np
             # q_dict = dict(zip(fresno_network.ods, list(tvodlulpe.q[i].numpy())))
             q_dict = dict(zip(model.triplist, list(model.q[i].numpy())))
 
-            label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]]['hour'])
+            label_period_feature_1 = int(period_keys[period_keys.period_id == model.period_dict[i]]['hour'].iloc[0])
             label_period_feature_2 = label_period_feature_1+1
 
             label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
