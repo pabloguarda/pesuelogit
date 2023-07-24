@@ -182,6 +182,12 @@ def get_tensors_by_year(df, features_Z, network) -> Tuple[Dict[str, tf.Tensor],D
         X[year] = get_design_tensor(Z=df_year[features_Z + ['period_id']], n_links=n_links, n_timepoints=n_timepoints)
 
     return X, Y
+
+def get_data_tensors(df, features_Z, network) -> Tuple[tf.Tensor,tf.Tensor]:
+
+    X, Y = get_tensors_by_year(df.assign(year = 0), features_Z, network)
+
+    return X[0], Y[0]
     
     
 def traveltime_imputation(raw_data: pd.DataFrame):
