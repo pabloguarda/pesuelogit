@@ -559,10 +559,13 @@ class PESUELOGIT(tf.keras.Model):
 
                 if sign == '+':
                     clips_min.append(0)
-                    clips_max.append(self.dtype.max)
-                if sign == '-':
-                    clips_min.append(self.dtype.min)
+                    clips_max.append(1e10)
+                elif sign == '-':
+                    clips_min.append(-1e10)
                     clips_max.append(0)
+                else:
+                    clips_min.append(-1e10)
+                    clips_max.append(1e10)
 
             return tf.clip_by_value(theta, clips_min, clips_max)
 
@@ -1626,6 +1629,9 @@ def compute_rr(parameters: Dict,
     # else:
     #     return float('nan')
 
+
+
+
 def compute_insample_outofsample_error(Y, true_counts, true_traveltimes, model, metric = mape, dtype = tf.float32):
     
     nonmissing_idxs = np.arange(0, len(Y[:, :, 1][0]))[~np.isnan(Y[:, :, 1][0].numpy())]
@@ -1654,8 +1660,39 @@ def compute_insample_outofsample_error(Y, true_counts, true_traveltimes, model, 
                'outofsample_error_traveltime': metric(tf.cast(true_traveltime_missing[np.newaxis,:],dtype),
                                                               tf.cast(model.predicted_traveltime(),dtype)).numpy()
                })
-    
-    
+
+
+def compute_loss_metric(model,
+                        metric=mse,
+                        prefix_metric: str = 'mse_',
+                        update_predictions=False,
+                        X=None,
+                        Y=None
+                        ):
+    '''
+    Compute loss metric for travel time, link flow and equilibrium componets. The loss_function should be computed
+    before
+
+    prefix_metric: e.g. 'loss_'
+    :return:
+    '''
+
+
+    model.loss_function(X=X, Y = Y, lambdas = {'tt':0})
+
+    observed_traveltime, observed_flow = model.observed_traveltimes, model.observed_flows
+
+    predicted_flow = model.predicted_flow()
+    predicted_traveltime =model.predicted_traveltime()
+    # output_flow = self._output_flow
+    # input_flow = self._input_flow
+
+    return {prefix_metric + 'flow': float(metric(actual=observed_flow, predicted=predicted_flow)),
+            prefix_metric + 'traveltime': float(metric(actual=observed_traveltime, predicted=predicted_traveltime)),
+            # prefix_metric + 'equilibrium': float(metric(actual=input_flow, predicted=output_flow))
+            }
+
+
     
 def normalize_od(X):
     '''
