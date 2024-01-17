@@ -1,7 +1,12 @@
 Parameter Estimation of Stochastic User Equilibrium with LOGIT assignment models (pesuelogit)
 ==============================================================================
 
-Preprint available at https://dx.doi.org/10.2139/ssrn.4490930
+This codebase allows the joint estimation of the Origin-Destination matrix using system-level data collected in multiple hourly periods and days.  To understand the theory behind the algorithms and the use cases of this tool, you can review the following resources:
+
++ Preprint: https://dx.doi.org/10.2139/ssrn.4490930
++ Journal article: http://dx.doi.org/10.1016/j.trc.2023.104409
+
+The folder ``examples/notebooks`` contains Jupyter notebooks with code demonstrations that can be reproduced from your local environment. Please follow the instructions below. 
 
 Development Setup
 =================
@@ -29,4 +34,12 @@ If using Linux or a Macbook with Apple Silicon chip, we recommend using Conda fo
 
 This repository is currently compatible with Python 3.9.x
 
+Collaboration
+=============
 
+For any questions or interest in collaborating on this project, please contact pabloguarda@cmu.edu. This package was developed under the guidance of Prof. Sean Qian. 
+
+Notes
+=====
+.. _openai-website:
+This project is being extended in `nesuelogit <https://github.com/pabloguarda/nesuelogit>`_
