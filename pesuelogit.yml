@@ -1,0 +1,17 @@
+name: pesuelogit
+channels:
+  - apple
+  - conda-forge
+dependencies:
+  - python >= 3.9
+  - tensorflow-deps == 2.10
+  - openmatrix
+  - jupyter
+  - pytest
+  - pip
+#  - numpy
+  - pip:
+    - tensorflow-macos == 2.9
+#    - tensorflow-deps == 2.10
+#    - tensorflow-metal==0.5.0
+    - git+https://github.com/pabloguarda/isuelogit.git

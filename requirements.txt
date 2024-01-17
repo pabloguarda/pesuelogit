@@ -1,0 +1,1 @@
+isuelogit @ git+https://github.com/pabloguarda/isuelogit.git

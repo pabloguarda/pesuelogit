@@ -1,0 +1,13 @@
+name: pesuelogit
+channels:
+  - conda-forge
+dependencies:
+  - python >= 3.9
+  - tensorflow
+  - openmatrix
+  - jupyter
+  - pytest
+  - pip
+#  - numpy
+  - pip:
+    - git+https://github.com/pabloguarda/isuelogit.git
