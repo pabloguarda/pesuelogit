@@ -1,4 +1,4 @@
-Parameter Estimation of Stochastic User Equilibrium with LOGIT assignment models (``PESUELOGIT``)
+Parameter Estimation of Stochastic User Equilibrium with LOGIT assignment models (PESUELOGIT)
 ==============================================================================
 
 ``PESUELOGIT`` allows for the joint estimation of the Origin-Destination matrix using system-level data collected in multiple hourly periods and days.  The diagram below shows a simplified representation of the computational graph that is solved for a toy transportation network with five nodes:
@@ -67,9 +67,7 @@ The folder ``examples/notebooks`` contains Jupyter notebooks with code demonstra
 
 #### Model training
 
-<img width="210" img src="./output/figures/fresno/fresno-convergence-odlue.png" /> 
-<img width="210" img src="./output/figures/fresno/fresno-convergence-odlulpe.png" /> 
-<img width="210" img src="./output/figures/fresno/fresno-convergence-tvodlulpe.png" alt="relative-gap-fresno" />
+<img width="210" img src="./output/figures/fresno/fresno-convergence-odlue.png" /> <img width="210" img src="./output/figures/fresno/fresno-convergence-odlulpe.png" /> <img width="210" img src="./output/figures/fresno/fresno-convergence-tvodlulpe.png" alt="relative-gap-fresno" />
 
 #### Parameter estimation
 
