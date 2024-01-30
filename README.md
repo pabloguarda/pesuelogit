@@ -16,8 +16,7 @@ To understand the theory behind the algorithms and the use cases of this codebas
 + Preprint: https://dx.doi.org/10.2139/ssrn.4490930
 + Journal article: http://dx.doi.org/10.1016/j.trc.2023.104409
 
-Development Setup
-=================
+## Development Setup
 
 If using a Windows computer or a Macbook with Intel chip, you can use [<u>poetry</u>](https://python-poetry.org/) for python packaging and dependency management. The steps are:
 
@@ -74,12 +73,10 @@ The folder ``examples/notebooks`` contains Jupyter notebooks with code demonstra
 <img align="top" width="220" img src="./output/figures/fresno/fresno-reliability-ratios.png"   alt="fresno-total-trips-periods" /> <img align="top" width="234" img src="./output/figures/fresno/fresno-estimates-total-trips.png" alt="fresno-utility-periods"  /> 
 
 
-Collaboration
-=============
+## Collaboration
 
 For any questions or interest in collaborating on this project, please open an issue in this repository. This package was developed under the guidance of Prof. Sean Qian. This codebase is being extended in the [MaTE](<https://github.com/pabloguarda/mate>) repository. 
 
-🌟 Loved the Project? Give Us a Star!
-=============
+## 🌟 Loved the Project? Give Us a Star!
 
 We are thrilled to see you here! If you find this codebase useful for your project or it has been a helpful resource, please consider giving it a star. 🌟 Your support means a lot and it also helps others discover this work.
