@@ -54,7 +54,7 @@ The folder ``examples/notebooks`` contains Jupyter notebooks with code demonstra
 <img width="230" img src="./output/figures/siouxfalls/siouxfalls-convergence-suelogit.png" alt="siouxfalls-convergence-suelogit" /> <img width="224" img src="./output/figures/siouxfalls/siouxfalls-relative-gap-suelogit.png" alt="relative-gap-siouxfalls" /> 
 <!-- <img width="230" img src="./output/figures/experiments/siouxfalls-relative-gap-mate.png" alt="relative-gap-siouxfalls" /> -->
 
-#### Origin-demand estimation
+#### Origin-destination demand estimation
 
 <img width="700" img src="./output/figures/siouxfalls/siouxfalls-heatmaps-ode.png" alt="ode-sioux" />
 
