@@ -72,10 +72,13 @@ The folder ``examples/notebooks`` contains Jupyter notebooks with code demonstra
 
 <img align="top" width="220" img src="./output/figures/fresno/fresno-reliability-ratios.png"   alt="fresno-total-trips-periods" /> <img align="top" width="234" img src="./output/figures/fresno/fresno-estimates-total-trips.png" alt="fresno-utility-periods"  /> 
 
-
 ## Collaboration
 
 For any questions or interest in collaborating on this project, please open an issue in this repository. This package was developed under the guidance of Prof. Sean Qian. This codebase is being extended in the [MaTE](<https://github.com/pabloguarda/mate>) repository. 
+
+## Funding 
+
+This project was partially funded through National Science Foundation Grant CMMI-1751448: [Probabilistic Network Flow Theory](https://www.nsf.gov/awardsearch/showAward?AWD_ID=1751448)
 
 ## 🌟 Loved the Project? Give Us a Star!
 
