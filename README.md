@@ -16,6 +16,19 @@ To understand the theory behind the algorithms and the use cases of this codebas
 + Preprint: https://dx.doi.org/10.2139/ssrn.4490930
 + Journal article: http://dx.doi.org/10.1016/j.trc.2023.104409
 
+Please cite this work as:
+
+```
+@article{guarda2024computational,
+  title={Estimating network flow and travel behavior using day-to-day system-level data: A computational graph approach},
+  author={Guarda, Pablo and Battifarano, Matthew and Qian, Sean},
+  journal={Transportation Research Part C: Emerging Technologies},
+  volume={158},
+  pages={104409},
+  year={2024}
+}
+```
+
 ## Development Setup
 
 If using a Windows computer or a Macbook with Intel chip, you can use [<u>poetry</u>](https://python-poetry.org/) for python packaging and dependency management. The steps are:
